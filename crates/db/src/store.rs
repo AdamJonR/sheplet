@@ -8,8 +8,9 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::StreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::Table;
+use tracing::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{DbError, Result};
@@ -30,6 +31,7 @@ pub struct SearchResult {
     pub text: String,
     pub source_file: String,
     pub chunk_index: u32,
+    /// Cosine similarity score (higher = more similar, range [-1, 1]).
     pub score: f32,
 }
 
@@ -105,6 +107,7 @@ impl VectorStore {
         let mut stream = table
             .vector_search(query_vector)?
             .limit(k)
+            .select(Select::columns(&["text", "source_file", "chunk_index"]))
             .execute()
             .await?;
 
@@ -173,7 +176,7 @@ impl VectorStore {
                     text: text_arr.value(i).to_string(),
                     source_file: source_arr.value(i).to_string(),
                     chunk_index: chunk_arr.value(i),
-                    score: dist_arr.value(i),
+                    score: 1.0 - dist_arr.value(i) / 2.0,
                 };
                 let vec_arr = vector_col
                     .value(i)
@@ -199,19 +202,16 @@ impl VectorStore {
             let mut best_score = f32::NEG_INFINITY;
 
             for (i, (result, vec)) in remaining.iter().enumerate() {
-                // Convert squared L2 distance to cosine similarity (for
-                // L2-normalized vectors: cosine_sim = 1 - distance/2).
-                // This puts relevance on the same [0,1] scale as the
-                // diversity term (cosine_similarity on line 212).
-                let relevance = 1.0 - result.score / 2.0;
+                let relevance = result.score;
 
-                // Max cosine similarity to any already-selected result.
+                // Max similarity to any already-selected result.
+                // Vectors are L2-normalized, so dot product = cosine similarity.
                 let max_sim = if selected.is_empty() {
                     0.0
                 } else {
                     selected
                         .iter()
-                        .map(|(_, sel_vec)| cosine_similarity(vec, sel_vec))
+                        .map(|(_, sel_vec)| dot_product(vec, sel_vec))
                         .fold(f32::NEG_INFINITY, f32::max)
                 };
 
@@ -254,6 +254,28 @@ impl VectorStore {
         let table = self.open_table().await?;
         table.delete("true").await?;
         Ok(())
+    }
+
+    /// Create an ANN index if the table has at least `min_rows` rows.
+    ///
+    /// Best-effort: logs a warning on failure rather than returning an error,
+    /// since brute-force search still works without an index.
+    pub async fn create_index_if_needed(&self, min_rows: usize) {
+        let Ok(table) = self.open_table().await else {
+            return;
+        };
+        let Ok(count) = table.count_rows(None).await else {
+            return;
+        };
+        if count >= min_rows {
+            if let Err(e) = table
+                .create_index(&["vector"], lancedb::index::Index::Auto)
+                .execute()
+                .await
+            {
+                warn!("Failed to create ANN index (brute-force will be used): {e}");
+            }
+        }
     }
 
     // ---- internal helpers ----
@@ -384,7 +406,7 @@ impl VectorStore {
                     text: text_arr.value(i).to_string(),
                     source_file: source_arr.value(i).to_string(),
                     chunk_index: chunk_arr.value(i),
-                    score: dist_arr.value(i),
+                    score: 1.0 - dist_arr.value(i) / 2.0,
                 });
             }
         }
@@ -392,15 +414,12 @@ impl VectorStore {
     }
 }
 
-/// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
+/// Dot product of two vectors.
+///
+/// For L2-normalized vectors this equals cosine similarity, avoiding
+/// the redundant norm computations of a full cosine_similarity call.
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]
@@ -446,13 +465,13 @@ mod tests {
 
         let results = store.search_top_k(&query, 3).await.unwrap();
         assert_eq!(results.len(), 3);
-        // Closest first (lowest distance).
+        // Closest first (highest similarity).
         assert_eq!(results[0].text, "close");
         assert_eq!(results[1].text, "medium");
         assert_eq!(results[2].text, "far");
-        // Scores should be in ascending order (distance).
-        assert!(results[0].score <= results[1].score);
-        assert!(results[1].score <= results[2].score);
+        // Scores should be in descending order (cosine similarity).
+        assert!(results[0].score >= results[1].score);
+        assert!(results[1].score >= results[2].score);
     }
 
     #[tokio::test]

@@ -2115,6 +2115,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5544,6 +5545,7 @@ dependencies = [
  "embeddings",
  "half",
  "lancedb",
+ "lru",
  "rand 0.8.5",
  "safetensors",
  "serde",

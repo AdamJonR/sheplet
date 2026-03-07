@@ -57,6 +57,9 @@ clap = { version = "4", features = ["derive"] }
 zstd = "0.13"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 
+# Caching
+lru = "0.12"
+
 # Storage
 sled = "0.34"
 

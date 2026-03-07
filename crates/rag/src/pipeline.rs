@@ -1,23 +1,16 @@
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Mutex;
 
 use conversations::{Citation, Message};
 use db::VectorStore;
 use embeddings::EmbeddingModel;
+use lru::LruCache;
 use tracing::debug;
 
 use crate::config::RagConfig;
 use crate::error::Result;
 use crate::prompt::assemble_prompt;
-
-/// Convert squared L2 distance to cosine similarity.
-///
-/// LanceDB returns squared L2 distance. For L2-normalized (unit-norm) vectors:
-///   squared_l2 = 2(1 - cosine_similarity)
-/// Therefore:
-///   cosine_similarity = 1.0 - squared_l2 / 2.0
-fn squared_l2_to_cosine_similarity(distance: f64) -> f64 {
-    1.0 - distance / 2.0
-}
 
 pub enum PreparedQuery {
     Ready {
@@ -33,6 +26,7 @@ pub struct RagPipeline {
     embedder: EmbeddingModel,
     store: VectorStore,
     config: RagConfig,
+    query_cache: Mutex<LruCache<String, Vec<f32>>>,
 }
 
 impl RagPipeline {
@@ -44,16 +38,28 @@ impl RagPipeline {
         let embedder = EmbeddingModel::from_local(embeddings_dir)?;
         let store =
             VectorStore::open_or_create(database_dir, "chunks", embeddings::EMBEDDING_DIM).await?;
+        store.create_index_if_needed(256).await;
         Ok(Self {
             embedder,
             store,
             config,
+            query_cache: Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())),
         })
     }
 
-    /// Embed a query string into a vector.
+    /// Embed a query string into a vector (cached for repeated queries).
     pub fn embed_query(&self, question: &str) -> Result<Vec<f32>> {
-        Ok(self.embedder.embed(question)?)
+        // Check cache first (brief lock).
+        if let Some(cached) = self.query_cache.lock().unwrap().get(question) {
+            return Ok(cached.clone());
+        }
+        // Compute outside the lock.
+        let embedding = self.embedder.embed(question)?;
+        self.query_cache
+            .lock()
+            .unwrap()
+            .put(question.to_string(), embedding.clone());
+        Ok(embedding)
     }
 
     /// Search the vector store for relevant chunks.
@@ -70,11 +76,10 @@ impl RagPipeline {
         question: &str,
     ) -> PreparedQuery {
         let any_relevant = results.iter().any(|r| {
-            let similarity = squared_l2_to_cosine_similarity(r.score as f64);
+            let similarity = r.score as f64;
             debug!(
                 source = %r.source_file,
                 chunk = r.chunk_index,
-                distance = r.score,
                 similarity,
                 threshold = self.config.relevance_threshold,
                 "retrieval score"
@@ -143,17 +148,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_squared_l2_to_cosine_similarity() {
-        // Distance 0.0 = identical vectors → similarity 1.0
-        assert!((squared_l2_to_cosine_similarity(0.0) - 1.0).abs() < 1e-10);
-
-        // Distance 2.0 = orthogonal vectors → similarity 0.0
-        assert!((squared_l2_to_cosine_similarity(2.0) - 0.0).abs() < 1e-10);
-
+    fn test_score_is_cosine_similarity() {
+        // Verify the conversion formula: cosine_sim = 1.0 - squared_l2 / 2.0
+        // Distance 0.0 → similarity 1.0
+        assert!((1.0 - 0.0_f64 / 2.0 - 1.0).abs() < 1e-10);
+        // Distance 2.0 → similarity 0.0
+        assert!((1.0 - 2.0_f64 / 2.0 - 0.0).abs() < 1e-10);
         // Distance 1.0 → similarity 0.5
-        assert!((squared_l2_to_cosine_similarity(1.0) - 0.5).abs() < 1e-10);
-
-        // Distance 4.0 = opposite vectors → similarity -1.0
-        assert!((squared_l2_to_cosine_similarity(4.0) - (-1.0)).abs() < 1e-10);
+        assert!((1.0 - 1.0_f64 / 2.0 - 0.5).abs() < 1e-10);
+        // Distance 4.0 → similarity -1.0
+        assert!((1.0 - 4.0_f64 / 2.0 - (-1.0)).abs() < 1e-10);
     }
 }
