@@ -35,10 +35,16 @@ impl EmbeddingModel {
     pub fn from_local(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
         let config_path = dir.join("config.json");
-        let weights_path = dir.join("model.safetensors");
-        let tokenizer_path = dir.join("tokenizer.json");
 
-        Self::load_from_files(&config_path, &weights_path, &tokenizer_path)
+        // If flat files exist, use them directly; otherwise resolve through HF cache structure
+        if config_path.exists() {
+            let weights_path = dir.join("model.safetensors");
+            let tokenizer_path = dir.join("tokenizer.json");
+            Self::load_from_files(&config_path, &weights_path, &tokenizer_path)
+        } else {
+            let files = crate::download::resolve_cached_files(dir)?;
+            Self::load_from_files(&files.config_json, &files.model_safetensors, &files.tokenizer_json)
+        }
     }
 
     /// Download the model from Hugging Face Hub and load it.

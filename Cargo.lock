@@ -2595,6 +2595,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
+ "tokenizers",
 ]
 
 [[package]]
@@ -5534,19 +5535,23 @@ name = "rag"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "candle-core",
  "candle-nn",
  "candle-transformers",
  "conversations",
  "db",
  "embeddings",
+ "half",
  "lancedb",
  "rand 0.8.5",
+ "safetensors",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokenizers",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6306,6 +6311,7 @@ dependencies = [
  "indicatif",
  "parser",
  "predicates",
+ "rag",
  "serde",
  "serde_json",
  "tempfile",

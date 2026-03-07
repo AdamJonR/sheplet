@@ -96,3 +96,11 @@ predicates = "3"
 # Crypto
 rand = "0.8"
 sha2 = "0.10"
+
+# Tracing
+tracing = "0.1"
+
+# Serialization (tensor)
+safetensors = "0.4"
+half = "2"
+byteorder = "1"

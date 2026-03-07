@@ -96,6 +96,29 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
         .context("failed to download embedding model")?;
     pb.finish_with_message("Embedding model downloaded.");
 
+    // Quantize the model
+    let gguf_path = model_dir.join("model.gguf");
+    let pb = progress::spinner(&format!("Quantizing model to {}...", quantization));
+    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization)
+        .context("failed to quantize model")?;
+    pb.finish_with_message(format!("Model quantized to {}.", quantization));
+
+    // Remove raw SafeTensors files after successful quantization
+    for entry in std::fs::read_dir(model_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "safetensors") {
+            std::fs::remove_file(&path)?;
+        }
+        // Also remove the index file if present
+        if path
+            .file_name()
+            .is_some_and(|n| n == "model.safetensors.index.json")
+        {
+            std::fs::remove_file(&path)?;
+        }
+    }
+
     // Update manifest
     manifest.model_name = Some(name.to_string());
     manifest.quantization = Some(quantization.to_string());
@@ -104,11 +127,7 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
     println!("Model setup complete.");
     println!("  Model: {}", name);
     println!("  Quantization: {}", quantization);
-    println!("  Location: {}", model_dir.display());
-
-    // Note: actual quantization would be applied here using candle
-    // For now we store the raw weights and record the desired quantization
-    println!("\nNote: Quantization ({}) will be applied during bundling.", quantization);
+    println!("  GGUF: {}", gguf_path.display());
 
     Ok(())
 }

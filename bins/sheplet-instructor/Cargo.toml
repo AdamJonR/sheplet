@@ -12,6 +12,7 @@ path = "src/main.rs"
 parser.workspace = true
 embeddings.workspace = true
 db.workspace = true
+rag.workspace = true
 finetune.workspace = true
 bundle.workspace = true
 

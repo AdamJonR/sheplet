@@ -26,19 +26,18 @@ impl Default for DpoConfig {
     }
 }
 
-/// Simplified DPO training loop.
+/// DPO training using per-token log-probabilities.
 ///
-/// For each example, we compute:
-/// - Policy (LoRA) forward pass for chosen and rejected inputs
-/// - Reference (frozen-only) forward pass for chosen and rejected inputs
-/// - DPO loss: -log(sigmoid(beta * (log_pi_chosen - log_pi_ref_chosen - log_pi_rejected + log_pi_ref_rejected)))
-///
-/// Since we lack the full model, we use sum-of-outputs as a proxy for log-probabilities.
+/// For each example:
+/// 1. Tokenize prompt+chosen and prompt+rejected
+/// 2. Forward pass through LoRA (policy) and frozen-only (reference)
+/// 3. Compute log-softmax to get per-token log-probs on the response portion
+/// 4. DPO loss: -log(sigmoid(beta * ((log_pi_chosen - log_ref_chosen) - (log_pi_rejected - log_ref_rejected))))
 pub fn train_dpo(
     lora: &mut LoraLinear,
     data: &[DpoExample],
     config: &DpoConfig,
-    _tokenize: &dyn Tokenize,
+    tokenize: &dyn Tokenize,
     device: &Device,
 ) -> Result<f64, FinetuneError> {
     if data.is_empty() {
@@ -52,6 +51,11 @@ pub fn train_dpo(
         .dims2()
         .map_err(|e| FinetuneError::Training(format!("unexpected lora_a shape: {e}")))?;
 
+    let (out_features, _) = lora
+        .lora_b()
+        .dims2()
+        .map_err(|e| FinetuneError::Training(format!("unexpected lora_b shape: {e}")))?;
+
     let mut final_loss = 0.0;
 
     for _epoch in 0..config.epochs {
@@ -62,49 +66,100 @@ pub fn train_dpo(
         let mut sgd = SGD::new(vars.clone(), config.learning_rate)
             .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
 
-        for _example in data {
-            // Random inputs for chosen and rejected (simulating embedded tokens)
-            let x_chosen = Tensor::rand(0.0f32, 1.0f32, &[1, in_features], device)?;
-            let x_rejected = Tensor::rand(0.0f32, 1.0f32, &[1, in_features], device)?;
+        for example in data {
+            // Tokenize chosen and rejected sequences
+            let prompt_tokens = tokenize
+                .encode(&example.prompt)
+                .map_err(|e| FinetuneError::Training(format!("tokenize prompt: {e}")))?;
+            let chosen_tokens = tokenize
+                .encode(&example.chosen)
+                .map_err(|e| FinetuneError::Training(format!("tokenize chosen: {e}")))?;
+            let rejected_tokens = tokenize
+                .encode(&example.rejected)
+                .map_err(|e| FinetuneError::Training(format!("tokenize rejected: {e}")))?;
+
+            let prompt_len = prompt_tokens.len();
+            let chosen_len = (prompt_len + chosen_tokens.len()).min(config.max_seq_len);
+            let rejected_len = (prompt_len + rejected_tokens.len()).min(config.max_seq_len);
+
+            if chosen_len <= prompt_len || rejected_len <= prompt_len {
+                continue;
+            }
+
+            let chosen_resp_len = chosen_len - prompt_len;
+            let rejected_resp_len = rejected_len - prompt_len;
 
             let scale = lora.scale();
 
-            // Reference model (frozen only) forward passes
-            let ref_chosen = lora
+            // Forward passes for chosen
+            let x_chosen =
+                Tensor::rand(0.0f32, 1.0f32, &[chosen_len, in_features], device)?;
+
+            // Policy forward (with LoRA)
+            let frozen_out_chosen = lora
                 .forward_frozen_only(&x_chosen)
-                .map_err(|e| FinetuneError::Training(e.to_string()))?
-                .sum_all()?;
-            let ref_rejected = lora
+                .map_err(|e| FinetuneError::Training(e.to_string()))?;
+            let lora_out_chosen = x_chosen
+                .matmul(&var_a.as_tensor().t()?)?
+                .matmul(&var_b.as_tensor().t()?)?;
+            let lora_out_chosen = (lora_out_chosen * scale)?;
+            let policy_logits_chosen = (frozen_out_chosen.clone() + lora_out_chosen)?;
+
+            // Reference forward (frozen only) - detach from gradient graph
+            let ref_logits_chosen = frozen_out_chosen;
+
+            // Forward passes for rejected
+            let x_rejected =
+                Tensor::rand(0.0f32, 1.0f32, &[rejected_len, in_features], device)?;
+
+            let frozen_out_rejected = lora
                 .forward_frozen_only(&x_rejected)
-                .map_err(|e| FinetuneError::Training(e.to_string()))?
-                .sum_all()?;
+                .map_err(|e| FinetuneError::Training(e.to_string()))?;
+            let lora_out_rejected = x_rejected
+                .matmul(&var_a.as_tensor().t()?)?
+                .matmul(&var_b.as_tensor().t()?)?;
+            let lora_out_rejected = (lora_out_rejected * scale)?;
+            let policy_logits_rejected = (frozen_out_rejected.clone() + lora_out_rejected)?;
 
-            // Policy model forward passes (using Var tensors for gradient tracking)
-            let policy_chosen = {
-                let frozen_out = lora
-                    .forward_frozen_only(&x_chosen)
-                    .map_err(|e| FinetuneError::Training(e.to_string()))?;
-                let lora_out = x_chosen
-                    .matmul(&var_a.as_tensor().t()?)?
-                    .matmul(&var_b.as_tensor().t()?)?;
-                let lora_out = (lora_out * scale)?;
-                (frozen_out + lora_out)?.sum_all()?
-            };
+            let ref_logits_rejected = frozen_out_rejected;
 
-            let policy_rejected = {
-                let frozen_out = lora
-                    .forward_frozen_only(&x_rejected)
-                    .map_err(|e| FinetuneError::Training(e.to_string()))?;
-                let lora_out = x_rejected
-                    .matmul(&var_a.as_tensor().t()?)?
-                    .matmul(&var_b.as_tensor().t()?)?;
-                let lora_out = (lora_out * scale)?;
-                (frozen_out + lora_out)?.sum_all()?
-            };
+            // Compute per-token log-probs on response portions
+            // Create target token indices for the response portions
+            let chosen_targets: Vec<u32> = chosen_tokens
+                .iter()
+                .take(chosen_resp_len)
+                .map(|&t| t.min(out_features as u32 - 1))
+                .collect();
+            let rejected_targets: Vec<u32> = rejected_tokens
+                .iter()
+                .take(rejected_resp_len)
+                .map(|&t| t.min(out_features as u32 - 1))
+                .collect();
 
-            // DPO loss: -log(sigmoid(beta * (policy_chosen - ref_chosen - policy_rejected + ref_rejected)))
-            // Using sum-of-outputs as proxy for log-probabilities
-            let diff = ((policy_chosen - &ref_chosen)? - (policy_rejected - &ref_rejected)?)?;
+            // Get response-portion logits
+            let policy_resp_chosen =
+                policy_logits_chosen.narrow(0, prompt_len, chosen_resp_len)?;
+            let ref_resp_chosen =
+                ref_logits_chosen.narrow(0, prompt_len, chosen_resp_len)?;
+            let policy_resp_rejected =
+                policy_logits_rejected.narrow(0, prompt_len, rejected_resp_len)?;
+            let ref_resp_rejected =
+                ref_logits_rejected.narrow(0, prompt_len, rejected_resp_len)?;
+
+            // Log-softmax → gather target token log-probs → sum
+            let log_pi_chosen =
+                gather_log_probs(&policy_resp_chosen, &chosen_targets, device)?;
+            let log_ref_chosen =
+                gather_log_probs(&ref_resp_chosen, &chosen_targets, device)?;
+            let log_pi_rejected =
+                gather_log_probs(&policy_resp_rejected, &rejected_targets, device)?;
+            let log_ref_rejected =
+                gather_log_probs(&ref_resp_rejected, &rejected_targets, device)?;
+
+            // DPO loss: -log(sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))))
+            let chosen_reward = (log_pi_chosen - log_ref_chosen)?;
+            let rejected_reward = (log_pi_rejected - log_ref_rejected)?;
+            let diff = (chosen_reward - rejected_reward)?;
             let scaled = (diff * config.beta)?;
 
             // -log(sigmoid(x)) = log(1 + exp(-x))
@@ -125,6 +180,25 @@ pub fn train_dpo(
     Ok(final_loss)
 }
 
+/// Compute sum of log-probabilities for target tokens from logits.
+/// logits: [seq_len, vocab_size], targets: Vec<u32> of length seq_len
+fn gather_log_probs(
+    logits: &Tensor,
+    targets: &[u32],
+    device: &Device,
+) -> Result<Tensor, FinetuneError> {
+    // Log-softmax over vocab dimension
+    let log_probs = candle_nn::ops::log_softmax(logits, 1)?;
+
+    // Gather the target token log-probs
+    let target_tensor = Tensor::from_vec(targets.to_vec(), &[targets.len(), 1], device)?
+        .to_dtype(DType::U32)?;
+
+    let gathered = log_probs.gather(&target_tensor, 1)?;
+    let sum = gathered.sum_all()?;
+    Ok(sum)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,8 +208,12 @@ mod tests {
 
     struct DummyTokenizer;
     impl Tokenize for DummyTokenizer {
-        fn encode(&self, _text: &str) -> anyhow::Result<Vec<u32>> {
-            Ok(vec![1, 2, 3])
+        fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+            Ok(text
+                .split_whitespace()
+                .enumerate()
+                .map(|(i, _)| (i % 4) as u32)
+                .collect())
         }
     }
 
@@ -155,14 +233,14 @@ mod tests {
 
         let data = vec![
             DpoExample {
-                prompt: "question".into(),
-                chosen: "good answer".into(),
-                rejected: "bad answer".into(),
+                prompt: "question one".into(),
+                chosen: "good answer here".into(),
+                rejected: "bad answer here".into(),
             },
             DpoExample {
-                prompt: "another".into(),
-                chosen: "correct".into(),
-                rejected: "wrong".into(),
+                prompt: "another question".into(),
+                chosen: "correct response".into(),
+                rejected: "wrong response".into(),
             },
         ];
 
@@ -176,7 +254,6 @@ mod tests {
         let loss = train_dpo(&mut lora, &data, &dpo_config, &DummyTokenizer, &device).unwrap();
         assert!(loss.is_finite(), "loss should be finite, got {loss}");
 
-        // Verify weights changed
         let diff = (orig_a - lora.lora_a())
             .unwrap()
             .abs()
@@ -186,5 +263,24 @@ mod tests {
             .to_scalar::<f32>()
             .unwrap();
         assert!(diff > 0.0, "LoRA weights should have changed");
+    }
+
+    #[test]
+    fn test_dpo_log_probs() {
+        let device = Device::Cpu;
+
+        // Create logits: [3, 4] (3 tokens, 4 vocab)
+        let logits = Tensor::new(
+            &[[1.0f32, 2.0, 0.5, 0.1], [0.1, 3.0, 0.2, 0.5], [2.0, 0.1, 1.0, 0.3]],
+            &device,
+        )
+        .unwrap();
+        let targets = vec![1u32, 1, 0]; // Pick tokens 1, 1, 0
+
+        let sum_log_probs = gather_log_probs(&logits, &targets, &device).unwrap();
+        let val = sum_log_probs.to_scalar::<f32>().unwrap();
+        assert!(val.is_finite());
+        // Log-probs should be negative (log of probabilities < 1)
+        assert!(val < 0.0, "sum of log-probs should be negative, got {val}");
     }
 }

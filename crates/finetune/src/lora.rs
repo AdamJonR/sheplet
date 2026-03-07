@@ -121,3 +121,67 @@ impl LoraLinear {
         Ok(())
     }
 }
+
+/// Multi-layer LoRA model for managing LoRA across multiple named layers.
+pub struct LoraModel {
+    pub layers: HashMap<String, LoraLinear>,
+    pub config: LoraConfig,
+}
+
+impl LoraModel {
+    pub fn new(config: LoraConfig) -> Self {
+        Self {
+            layers: HashMap::new(),
+            config,
+        }
+    }
+
+    pub fn add_layer(
+        &mut self,
+        name: String,
+        frozen: candle_nn::Linear,
+        in_features: usize,
+        out_features: usize,
+        device: &Device,
+    ) -> Result<()> {
+        let lora = LoraLinear::new(frozen, in_features, out_features, &self.config, device)?;
+        self.layers.insert(name, lora);
+        Ok(())
+    }
+
+    /// Save all LoRA layers to a single safetensors file with namespaced keys.
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let mut tensors = HashMap::new();
+        for (name, lora) in &self.layers {
+            tensors.insert(format!("{name}.lora_a"), lora.lora_a().clone());
+            tensors.insert(format!("{name}.lora_b"), lora.lora_b().clone());
+        }
+        candle_core::safetensors::save(&tensors, path.as_ref())
+            .context("failed to save multi-layer LoRA adapter")?;
+        Ok(())
+    }
+
+    /// Load all LoRA layers from a namespaced safetensors file.
+    pub fn load<P: AsRef<Path>>(&mut self, path: P, device: &Device) -> Result<()> {
+        let tensors = candle_core::safetensors::load(path.as_ref(), device)
+            .context("failed to load multi-layer LoRA adapter")?;
+        for (name, lora) in &mut self.layers {
+            let a_key = format!("{name}.lora_a");
+            let b_key = format!("{name}.lora_b");
+            if let (Some(a), Some(b)) = (tensors.get(&a_key), tensors.get(&b_key)) {
+                lora.set_lora_a(a.clone());
+                lora.set_lora_b(b.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect all trainable tensors across all layers.
+    pub fn trainable_tensors(&self) -> Vec<&Tensor> {
+        let mut result = Vec::new();
+        for lora in self.layers.values() {
+            result.extend(lora.trainable_tensors());
+        }
+        result
+    }
+}

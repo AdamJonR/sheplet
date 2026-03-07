@@ -48,6 +48,51 @@ pub fn download_model_files(cache_dir: impl AsRef<Path>) -> Result<DownloadedFil
     })
 }
 
+/// Resolve model files from an existing HF Hub cache directory (no download).
+///
+/// Walks the cache structure to find the snapshot directory containing the model files.
+pub fn resolve_cached_files(cache_dir: impl AsRef<Path>) -> Result<DownloadedFiles> {
+    let cache_dir = cache_dir.as_ref();
+
+    // HF cache layout: <cache_dir>/models--<org>--<name>/snapshots/<hash>/
+    let models_dir = cache_dir.join(format!(
+        "models--{}",
+        MODEL_REPO.replace('/', "--")
+    ));
+
+    if !models_dir.is_dir() {
+        return Err(EmbeddingsError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("HF cache model dir not found: {}", models_dir.display()),
+        )));
+    }
+
+    // Read the current ref to find the snapshot hash
+    let ref_path = models_dir.join("refs").join("main");
+    let snapshot_hash = std::fs::read_to_string(&ref_path)
+        .map_err(|e| EmbeddingsError::Io(std::io::Error::new(
+            e.kind(),
+            format!("failed to read refs/main at {}: {e}", ref_path.display()),
+        )))?;
+    let snapshot_dir = models_dir.join("snapshots").join(snapshot_hash.trim());
+
+    for &file_name in REQUIRED_FILES {
+        let p = snapshot_dir.join(file_name);
+        if !p.exists() {
+            return Err(EmbeddingsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("missing {file_name} in {}", snapshot_dir.display()),
+            )));
+        }
+    }
+
+    Ok(DownloadedFiles {
+        model_safetensors: snapshot_dir.join("model.safetensors"),
+        config_json: snapshot_dir.join("config.json"),
+        tokenizer_json: snapshot_dir.join("tokenizer.json"),
+    })
+}
+
 /// Paths to the downloaded model files.
 #[derive(Debug, Clone)]
 pub struct DownloadedFiles {
