@@ -1,0 +1,30 @@
+[package]
+name = "sheplet-student"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sheplet-student"
+path = "src/main.rs"
+
+[dependencies]
+rag.workspace = true
+embeddings.workspace = true
+db.workspace = true
+bundle.workspace = true
+conversations.workspace = true
+
+candle-core.workspace = true
+candle-transformers.workspace = true
+lancedb.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+dirs.workspace = true

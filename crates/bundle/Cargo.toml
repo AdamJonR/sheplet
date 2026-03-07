@@ -1,0 +1,21 @@
+[package]
+name = "bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zstd.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+tar.workspace = true
+hex.workspace = true
+rand.workspace = true
+sha2.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

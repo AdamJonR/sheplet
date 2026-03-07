@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sheplet Student</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>Sheplet</h1>
+            </div>
+
+            <div class="sidebar-section">
+                <button id="load-bundle-btn" class="btn btn-primary">Load Bundle</button>
+                <input type="file" id="bundle-file-input" accept=".sheplet" style="display:none">
+            </div>
+
+            <div class="sidebar-section">
+                <h2>Courses</h2>
+                <ul id="course-list" class="item-list"></ul>
+            </div>
+
+            <div class="sidebar-section">
+                <h2>Conversations</h2>
+                <button id="new-conversation-btn" class="btn btn-small">+ New</button>
+                <ul id="conversation-list" class="item-list"></ul>
+            </div>
+
+            <div class="sidebar-footer">
+                <button id="settings-btn" class="btn btn-small">Settings</button>
+            </div>
+        </aside>
+
+        <main id="main">
+            <header id="header">
+                <span id="course-info">No course loaded</span>
+            </header>
+
+            <div id="chat-area">
+                <div id="messages"></div>
+            </div>
+
+            <div id="input-area">
+                <textarea id="message-input" placeholder="Type your question..." rows="1"></textarea>
+                <button id="send-btn" class="btn btn-primary">Send</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Retrieval Settings</h2>
+                <button id="close-settings" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="setting-strategy">Strategy</label>
+                    <select id="setting-strategy">
+                        <option value="top-k">Top-K</option>
+                        <option value="mmr">MMR (Maximal Marginal Relevance)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="setting-k">Top K</label>
+                    <input type="number" id="setting-k" min="1" max="20" value="5">
+                </div>
+                <div class="form-group">
+                    <label for="setting-threshold">Relevance Threshold</label>
+                    <input type="number" id="setting-threshold" min="0" max="1" step="0.05" value="0.7">
+                </div>
+                <div class="form-group">
+                    <label for="setting-lambda">MMR Lambda</label>
+                    <input type="number" id="setting-lambda" min="0" max="1" step="0.1" value="0.5">
+                </div>
+                <button id="save-settings" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bundle Path Modal -->
+    <div id="bundle-modal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Load Bundle</h2>
+                <button id="close-bundle-modal" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="bundle-path-input">Bundle file path (.sheplet)</label>
+                    <input type="text" id="bundle-path-input" placeholder="/path/to/course.sheplet">
+                </div>
+                <button id="submit-bundle-path" class="btn btn-primary">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

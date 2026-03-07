@@ -1,0 +1,114 @@
+use anyhow::{Context, Result};
+use std::path::Path;
+
+use crate::progress;
+use crate::project::{require_init, project_dirs};
+
+pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
+    let mut manifest = require_init(project)?;
+    let dirs = project_dirs(project);
+
+    let repo_id = match name {
+        "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
+        other => other,
+    };
+
+    // Download model files from HF Hub
+    let pb = progress::spinner(&format!("Downloading model {}...", repo_id));
+    let api = hf_hub::api::sync::Api::new()?;
+    let repo = api.model(repo_id.to_string());
+
+    // Download key model files
+    let model_dir = &dirs.model;
+    std::fs::create_dir_all(model_dir)?;
+
+    let files_to_download = [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ];
+
+    for filename in &files_to_download {
+        match repo.get(filename) {
+            Ok(src_path) => {
+                let dest = model_dir.join(filename);
+                if src_path != dest {
+                    std::fs::copy(&src_path, &dest)
+                        .with_context(|| format!("failed to copy {}", filename))?;
+                }
+            }
+            Err(e) => {
+                println!("  Warning: could not download {}: {}", filename, e);
+            }
+        }
+    }
+
+    // Download model weights (safetensors)
+    // Try model.safetensors first, fall back to model.safetensors.index.json for sharded models
+    match repo.get("model.safetensors") {
+        Ok(src_path) => {
+            let dest = model_dir.join("model.safetensors");
+            if src_path != dest {
+                std::fs::copy(&src_path, &dest)?;
+            }
+        }
+        Err(_) => {
+            // Try sharded model
+            match repo.get("model.safetensors.index.json") {
+                Ok(index_path) => {
+                    let dest = model_dir.join("model.safetensors.index.json");
+                    if index_path != dest {
+                        std::fs::copy(&index_path, &dest)?;
+                    }
+
+                    // Parse index to find shard files
+                    let index_content = std::fs::read_to_string(&index_path)?;
+                    let index: serde_json::Value = serde_json::from_str(&index_content)?;
+                    if let Some(weight_map) = index.get("weight_map").and_then(|v| v.as_object()) {
+                        let shard_files: std::collections::HashSet<&str> =
+                            weight_map.values().filter_map(|v| v.as_str()).collect();
+                        for shard in shard_files {
+                            match repo.get(shard) {
+                                Ok(src_path) => {
+                                    let dest = model_dir.join(shard);
+                                    if src_path != dest {
+                                        std::fs::copy(&src_path, &dest)?;
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("  Warning: could not download shard {}: {}", shard, e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  Warning: could not find model weights: {}", e);
+                }
+            }
+        }
+    }
+    pb.finish_with_message(format!("Model {} downloaded.", repo_id));
+
+    // Also download embedding model
+    let pb = progress::spinner("Downloading embedding model...");
+    let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings)
+        .context("failed to download embedding model")?;
+    pb.finish_with_message("Embedding model downloaded.");
+
+    // Update manifest
+    manifest.model_name = Some(name.to_string());
+    manifest.quantization = Some(quantization.to_string());
+    manifest.save(&dirs.root)?;
+
+    println!("Model setup complete.");
+    println!("  Model: {}", name);
+    println!("  Quantization: {}", quantization);
+    println!("  Location: {}", model_dir.display());
+
+    // Note: actual quantization would be applied here using candle
+    // For now we store the raw weights and record the desired quantization
+    println!("\nNote: Quantization ({}) will be applied during bundling.", quantization);
+
+    Ok(())
+}

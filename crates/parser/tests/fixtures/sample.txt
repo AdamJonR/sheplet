@@ -1,0 +1,39 @@
+Introduction to Machine Learning
+
+Machine learning is a subset of artificial intelligence that focuses on developing systems
+that can learn from and make decisions based on data. Rather than being explicitly programmed
+to perform a task, machine learning algorithms use statistical techniques to identify patterns
+in data and make predictions or decisions without human intervention.
+
+Supervised Learning
+
+In supervised learning, the algorithm is trained on labeled data. This means the training
+dataset includes both input features and the corresponding correct output labels. The
+algorithm learns to map inputs to outputs by finding patterns in the training data. Common
+supervised learning algorithms include linear regression, logistic regression, decision trees,
+random forests, and neural networks.
+
+Unsupervised Learning
+
+Unsupervised learning algorithms work with unlabeled data. The goal is to discover hidden
+patterns, groupings, or structures within the data without prior knowledge of what the output
+should be. Clustering algorithms such as K-means, hierarchical clustering, and DBSCAN are
+popular unsupervised learning techniques. Dimensionality reduction methods like PCA and t-SNE
+also fall under this category.
+
+Reinforcement Learning
+
+Reinforcement learning involves an agent that learns to make decisions by interacting with an
+environment. The agent receives rewards or penalties based on its actions and learns to
+maximize cumulative reward over time. This approach has been successfully applied to game
+playing, robotics, and autonomous driving. Key concepts include states, actions, policies,
+and value functions.
+
+Deep Learning
+
+Deep learning is a subset of machine learning that uses artificial neural networks with
+multiple layers (hence "deep") to model complex patterns in data. Convolutional neural
+networks (CNNs) are particularly effective for image recognition tasks, while recurrent
+neural networks (RNNs) and transformers excel at processing sequential data such as text
+and time series. The transformer architecture has revolutionized natural language processing,
+leading to models like BERT, GPT, and their successors.
