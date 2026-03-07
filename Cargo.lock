@@ -6321,6 +6321,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "sheplet-instructor-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bundle",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "db",
+ "dirs 6.0.0",
+ "embeddings",
+ "finetune",
+ "hex",
+ "hf-hub",
+ "parser",
+ "rag",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokenizers",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+]
+
+[[package]]
 name = "sheplet-student"
 version = "0.1.0"
 dependencies = [
@@ -7143,6 +7170,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

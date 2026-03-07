@@ -1,13 +1,14 @@
-# Sheplet — Project Specification v1.6
+# Sheplet — Project Specification v1.7
 > A fully local, socioeconomically accessible RAG + fine-tuning platform for students and instructors, built entirely in Rust.
 
 ---
 
 ## 1. Project Overview
 
-Sheplet consists of two separate executables:
+Sheplet consists of three executables:
 
 - **sheplet-instructor** — a CLI tool used by professors to ingest source documents, build a LanceDB vector database, select and quantize a model, perform LoRA fine-tuning, and package everything into a single signed distributable bundle.
+- **sheplet-instructor-web** — a web-based alternative to the CLI that provides the same capabilities through a guided browser interface with real-time progress visualization. Ideal for instructors who prefer a graphical workflow.
 - **sheplet-student** — a zero-setup desktop client used by students. They download the executable and a `.sheplet` bundle from their professor, and everything works immediately.
 
 Everything runs locally. No API keys, no cloud services, no Python environment, no configuration required of students.
@@ -41,7 +42,7 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 | CSV | `csv` crate | Pure Rust, mature |
 | Embeddings | Candle native (all-MiniLM-L6-v2) | Pure Rust via Candle, SafeTensors |
 | Student Web Server | `axum` | Pure Rust, modern async ergonomics |
-| Instructor Interface | CLI (`clap`) | Pure Rust argument parsing |
+| Instructor Interface | CLI (`clap`) + Web UI (`axum`) | CLI or browser-based workflow |
 | Bundle Compression | `zstd` | Pure Rust, high compression ratio |
 | Bundle Signing | `ed25519-dalek` | Pure Rust, asymmetric signing |
 | Conversation Storage | `sled` | Pure Rust embedded key-value store |
@@ -68,9 +69,9 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 
 ---
 
-## 5. The Two Executables
+## 5. The Executables
 
-### sheplet-instructor
+### sheplet-instructor (CLI)
 A CLI tool for professors. Runs on the professor's machine. Used to:
 - Ingest a directory of source documents
 - Build and populate a LanceDB vector database
@@ -78,6 +79,14 @@ A CLI tool for professors. Runs on the professor's machine. Used to:
 - Apply quantization
 - Perform LoRA fine-tuning (DPO and/or SFT)
 - Sign and package everything into a versioned `.sheplet` bundle file
+
+### sheplet-instructor-web (Web UI)
+A web-based alternative to the CLI for professors who prefer a graphical interface. Provides the same capabilities as `sheplet-instructor` through a browser-based dashboard:
+- Guided workflow with project status checklist
+- Visual progress tracking for long-running operations (document ingestion, model download, fine-tuning) via Server-Sent Events
+- Form-based configuration with descriptions of each option
+- Multi-project management with project selector
+- Runs on `localhost:8421` — self-contained binary with embedded HTML/CSS/JS frontend
 
 ### sheplet-student
 A self-contained desktop client for students. Runs on the student's machine. Used to:
@@ -325,6 +334,28 @@ sheplet-instructor
 └── bundle      → compress with zstd → sign with Ed25519 → output .sheplet
 ```
 
+### sheplet-instructor-web (Web UI)
+```
+┌─────────────────────────────────────────────────┐
+│          HTML/CSS/JS Frontend                   │
+│      Served on localhost:8421 via axum           │
+│  Dashboard | Ingest | Model | Finetune | Bundle │
+└──────────────────┬──────────────────────────────┘
+                   │ HTTP + SSE (localhost only)
+┌──────────────────▼──────────────────────────────┐
+│              axum + Task Manager                 │
+│  ┌──────────────┐  ┌──────────────────────────┐ │
+│  │   Projects   │  │   Background Tasks       │ │
+│  │  (multi)     │  │   (SSE progress)         │ │
+│  └──────────────┘  └──────────────────────────┘ │
+│  ┌──────────────────────────────────────────┐   │
+│  │  Library Crates (same as CLI)            │   │
+│  │  parser | embeddings | db | rag          │   │
+│  │  finetune | bundle                       │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────┘
+```
+
 ### sheplet-student (Desktop Client)
 ```
 ┌────────────────────────────────────────────────┐
@@ -399,9 +430,10 @@ sheplet-student/
 
 ## 16. Distribution
 
-### sheplet-instructor
+### sheplet-instructor / sheplet-instructor-web
 - Downloaded by professors from the Sheplet project website
 - Single binary per platform: Windows, macOS, Linux
+- Professors can choose either the CLI (`sheplet-instructor`) or the web UI (`sheplet-instructor-web`) — both produce identical outputs
 
 ### sheplet-student
 - Downloaded by students from the Sheplet project website
@@ -446,11 +478,13 @@ To be decided. Recommended: open source core (MIT or Apache 2.0) with official s
 | `docx-rs` | Instructor | Word document parsing | ✅ |
 | `calamine` | Instructor | Excel/CSV/ODS parsing | ✅ |
 | `csv` | Instructor | CSV parsing | ✅ |
-| `clap` | Instructor | CLI argument parsing | ✅ |
+| `clap` | Instructor CLI | CLI argument parsing | ✅ |
 | `zstd` | Both | Bundle compression/decompression | ✅ |
 | `ed25519-dalek` | Both | Bundle signing and verification | ✅ |
 | `sled` | Student | Conversation persistence | ✅ |
-| `axum` | Student | Local web server | ✅ |
+| `axum` | Student + Instructor Web | Local web server | ✅ |
+| `tokio-stream` | Student + Instructor Web | SSE streaming | ✅ |
+| `tower-http` | Student + Instructor Web | CORS middleware | ✅ |
 | `hf-hub` | Instructor | Hugging Face model downloading | ✅ |
 | `tokio` | Both | Async runtime | ✅ |
 | `serde` / `serde_json` | Both | Serialization | ✅ |

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sheplet Instructor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>Sheplet Instructor</h1>
+            </div>
+
+            <div class="sidebar-section">
+                <h2>Project</h2>
+                <select id="project-select">
+                    <option value="">No project selected</option>
+                </select>
+                <button id="new-project-btn" class="btn btn-primary" style="margin-top:8px">+ New Project</button>
+            </div>
+
+            <div class="sidebar-section">
+                <h2>Workflow</h2>
+                <ul id="nav-list" class="item-list">
+                    <li data-view="dashboard" class="active">Dashboard</li>
+                    <li data-view="ingest">Ingest Documents</li>
+                    <li data-view="model">Model Setup</li>
+                    <li data-view="finetune">Fine-tune</li>
+                    <li data-view="config">Configuration</li>
+                    <li data-view="bundle">Bundle</li>
+                </ul>
+            </div>
+
+            <div class="sidebar-footer">
+                <div id="task-indicator" style="display:none">
+                    <span class="spinner"></span>
+                    <span id="task-indicator-text">Task running...</span>
+                </div>
+            </div>
+        </aside>
+
+        <main id="main">
+            <header id="header">
+                <span id="header-info">No project selected</span>
+            </header>
+
+            <div id="content-area">
+                <!-- Dashboard View -->
+                <div id="view-dashboard" class="view active">
+                    <div class="view-content">
+                        <div class="empty-state" id="no-project-state">
+                            <h2>Welcome to Sheplet Instructor</h2>
+                            <p>Create or select a project to get started.</p>
+                        </div>
+                        <div id="dashboard-content" style="display:none">
+                            <h2 class="view-title">Project Status</h2>
+                            <div id="status-checklist" class="checklist"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ingest View -->
+                <div id="view-ingest" class="view">
+                    <div class="view-content">
+                        <h2 class="view-title">Ingest Documents</h2>
+                        <p class="view-desc">Parse source documents, embed them, and store in the vector database. Supports PDF, Word, Excel, CSV, and plain text files.</p>
+                        <div class="form-group">
+                            <label for="ingest-sources">Source documents directory</label>
+                            <input type="text" id="ingest-sources" placeholder="/path/to/source/documents">
+                        </div>
+                        <button id="ingest-btn" class="btn btn-primary" style="width:auto">Start Ingestion</button>
+                        <div id="ingest-progress" class="progress-display" style="display:none"></div>
+                    </div>
+                </div>
+
+                <!-- Model View -->
+                <div id="view-model" class="view">
+                    <div class="view-content">
+                        <h2 class="view-title">Model Setup</h2>
+                        <p class="view-desc">Download a language model from Hugging Face and quantize it for efficient local inference.</p>
+                        <div class="form-group">
+                            <label for="model-name">Model</label>
+                            <select id="model-name">
+                                <option value="phi-4-mini-instruct" selected>Phi-4 Mini Instruct (3.8B, recommended)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="model-quant">Quantization</label>
+                            <select id="model-quant">
+                                <option value="q4-k-m" selected>Q4_K_M (best balance, ~2.5GB)</option>
+                                <option value="q4-k-s">Q4_K_S (smaller, lower quality)</option>
+                                <option value="q5-k-m">Q5_K_M (higher quality, ~3GB)</option>
+                                <option value="q8-0">Q8_0 (highest quality, ~4GB)</option>
+                            </select>
+                        </div>
+                        <button id="model-btn" class="btn btn-primary" style="width:auto">Download &amp; Quantize</button>
+                        <div id="model-progress" class="progress-display" style="display:none"></div>
+                    </div>
+                </div>
+
+                <!-- Finetune View -->
+                <div id="view-finetune" class="view">
+                    <div class="view-content">
+                        <h2 class="view-title">Fine-tune</h2>
+                        <p class="view-desc">Train a LoRA adapter on your course-specific data using SFT (supervised fine-tuning) or DPO (direct preference optimization).</p>
+
+                        <div style="margin-bottom:16px">
+                            <button id="gen-templates-btn" class="btn btn-small">Generate Template Files</button>
+                            <span id="gen-templates-status" class="status-text"></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ft-method">Training Method</label>
+                            <select id="ft-method">
+                                <option value="sft">SFT (Supervised Fine-Tuning)</option>
+                                <option value="dpo">DPO (Direct Preference Optimization)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="ft-data">Data File</label>
+                            <select id="ft-data">
+                                <option value="">No files found</option>
+                            </select>
+                            <button id="refresh-files-btn" class="btn btn-small" style="margin-top:4px">Refresh Files</button>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="ft-lr">Learning Rate (optional)</label>
+                                <input type="number" id="ft-lr" step="0.0001" placeholder="default">
+                            </div>
+                            <div class="form-group">
+                                <label for="ft-epochs">Epochs (optional)</label>
+                                <input type="number" id="ft-epochs" min="1" placeholder="default">
+                            </div>
+                        </div>
+                        <button id="finetune-btn" class="btn btn-primary" style="width:auto">Start Training</button>
+                        <div id="finetune-progress" class="progress-display" style="display:none"></div>
+                    </div>
+                </div>
+
+                <!-- Config View -->
+                <div id="view-config" class="view">
+                    <div class="view-content">
+                        <h2 class="view-title">Configuration</h2>
+                        <p class="view-desc">Set the system prompt and retrieval parameters for your course. These settings are locked for students — they define how the tutor behaves.</p>
+                        <div class="form-group">
+                            <label for="cfg-prompt">System Prompt</label>
+                            <textarea id="cfg-prompt" rows="4" placeholder="You are a helpful tutor..."></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-strategy">Retrieval Strategy</label>
+                            <select id="cfg-strategy">
+                                <option value="top-k">Top-K</option>
+                                <option value="mmr">MMR (Maximal Marginal Relevance)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-topk">Top K</label>
+                            <input type="number" id="cfg-topk" min="1" max="100" value="5">
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-threshold">Relevance Threshold</label>
+                            <input type="range" id="cfg-threshold" min="0" max="1" step="0.05" value="0.3">
+                            <span id="cfg-threshold-val">0.3</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-lambda">MMR Lambda</label>
+                            <input type="range" id="cfg-lambda" min="0" max="1" step="0.1" value="0.5">
+                            <span id="cfg-lambda-val">0.5</span>
+                        </div>
+                        <button id="save-config-btn" class="btn btn-primary" style="width:auto">Save Configuration</button>
+                        <span id="config-status" class="status-text"></span>
+                    </div>
+                </div>
+
+                <!-- Bundle View -->
+                <div id="view-bundle" class="view">
+                    <div class="view-content">
+                        <h2 class="view-title">Bundle &amp; Distribute</h2>
+                        <p class="view-desc">Package your project into a signed .sheplet bundle that students can load. The bundle contains the quantized model, LoRA adapter, embeddings, vector database, and configuration.</p>
+                        <div id="bundle-info" class="info-box"></div>
+                        <div class="form-group">
+                            <label for="bundle-output">Output file path</label>
+                            <input type="text" id="bundle-output" placeholder="/path/to/course.sheplet">
+                        </div>
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="bundle-bump"> Bump version number
+                            </label>
+                        </div>
+                        <button id="bundle-btn" class="btn btn-primary" style="width:auto">Create Bundle</button>
+                        <div id="bundle-progress" class="progress-display" style="display:none"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- New Project Modal -->
+    <div id="new-project-modal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>New Project</h2>
+                <button id="close-new-project" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="np-course-name">Course Name</label>
+                    <input type="text" id="np-course-name" placeholder="Introduction to Biology">
+                </div>
+                <div class="form-group">
+                    <label for="np-dir-name">Directory Name</label>
+                    <input type="text" id="np-dir-name" placeholder="bio101">
+                </div>
+                <button id="create-project-btn" class="btn btn-primary">Create Project</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sheplet is a fully local RAG + LoRA fine-tuning platform for education, built entirely in pure Rust. Two executables:
+Sheplet is a fully local RAG + LoRA fine-tuning platform for education, built entirely in pure Rust. Three executables:
 - **sheplet-instructor** (`bins/sheplet-instructor`) — CLI for professors to ingest documents, fine-tune models, and package signed bundles
-- **sheplet-student** (`bins/sheplet-student`) — Desktop client (axum + Leptos/WASM) for students to chat with course-specific fine-tuned models
+- **sheplet-instructor-web** (`bins/sheplet-instructor-web`) — Web UI alternative to the CLI (axum + vanilla HTML/CSS/JS) with guided workflow and SSE progress tracking
+- **sheplet-student** (`bins/sheplet-student`) — Desktop client (axum + HTML/CSS/JS) for students to chat with course-specific fine-tuned models
 
 Everything runs locally with no API keys, cloud services, or Python. See `SPEC.md` for the full technical specification.
 
@@ -18,18 +19,20 @@ cargo build --release          # Release build
 cargo check                    # Quick type/syntax check
 cargo test                     # Run all tests
 cargo test -p <crate>          # Run tests for a specific crate (e.g., cargo test -p finetune)
-cargo build -p sheplet-instructor  # Build only the instructor binary
-cargo build -p sheplet-student     # Build only the student binary
+cargo build -p sheplet-instructor      # Build only the instructor CLI
+cargo build -p sheplet-instructor-web  # Build only the instructor web UI
+cargo build -p sheplet-student         # Build only the student binary
 ```
 
 ## Workspace Architecture
 
-Cargo workspace with 2 binaries and 7 library crates:
+Cargo workspace with 3 binaries and 7 library crates:
 
 ```
 bins/
-  sheplet-instructor    — CLI (clap): init, ingest, model, finetune, config, bundle
-  sheplet-student       — Desktop app: axum server + Leptos WASM frontend
+  sheplet-instructor      — CLI (clap): init, ingest, model, finetune, config, bundle
+  sheplet-instructor-web  — Web UI (axum): same workflow as CLI with browser interface
+  sheplet-student          — Desktop app: axum server + HTML/CSS/JS frontend
 
 crates/
   parser                — Document parsing (PDF, Word, Excel, CSV, text) + semantic chunking

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "bins/sheplet-instructor",
+    "bins/sheplet-instructor-web",
     "bins/sheplet-student",
     "crates/rag",
     "crates/finetune",
@@ -46,7 +47,7 @@ csv = "1"
 axum = "0.8"
 leptos = "0.7"
 tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
 # CLI
