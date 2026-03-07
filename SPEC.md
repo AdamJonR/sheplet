@@ -41,7 +41,6 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 | CSV | `csv` crate | Pure Rust, mature |
 | Embeddings | Candle native (all-MiniLM-L6-v2) | Pure Rust via Candle, SafeTensors |
 | Student Web Server | `axum` | Pure Rust, modern async ergonomics |
-| Student Frontend | `leptos` | Pure Rust, compiles to WebAssembly |
 | Instructor Interface | CLI (`clap`) | Pure Rust argument parsing |
 | Bundle Compression | `zstd` | Pure Rust, high compression ratio |
 | Bundle Signing | `ed25519-dalek` | Pure Rust, asymmetric signing |
@@ -257,7 +256,7 @@ sheplet-instructor bundle --project ./bio101 --output ./bio101_v2.sheplet --bump
 
 ### First Launch
 1. Student launches `sheplet-student`
-2. Browser opens to localhost Leptos UI
+2. Browser opens to localhost UI
 3. Student loads one or more `.sheplet` bundle files
 4. Each bundle is signature-verified then extracted
 5. Course switcher appears if multiple bundles are loaded
@@ -329,7 +328,7 @@ sheplet-instructor
 ### sheplet-student (Desktop Client)
 ```
 ┌────────────────────────────────────────────────┐
-│           Leptos Frontend (WebAssembly)          │
+│           HTML/CSS Frontend         │
 │     Served on localhost via axum                 │
 │  Course Switcher | Chat | Conversations | Export │
 └───────────────────┬──────────────────────────────┘
@@ -431,7 +430,6 @@ To be decided. Recommended: open source core (MIT or Apache 2.0) with official s
 - CPU-only inference in v1.0
 - No automatic bundle update mechanism
 - No image or audio document support
-- Leptos/WASM requires a modern browser
 
 ---
 
@@ -453,7 +451,6 @@ To be decided. Recommended: open source core (MIT or Apache 2.0) with official s
 | `ed25519-dalek` | Both | Bundle signing and verification | ✅ |
 | `sled` | Student | Conversation persistence | ✅ |
 | `axum` | Student | Local web server | ✅ |
-| `leptos` | Student | Pure Rust/WASM frontend | ✅ |
 | `hf-hub` | Instructor | Hugging Face model downloading | ✅ |
 | `tokio` | Both | Async runtime | ✅ |
 | `serde` / `serde_json` | Both | Serialization | ✅ |
