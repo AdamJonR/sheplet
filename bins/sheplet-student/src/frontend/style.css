@@ -223,6 +223,67 @@ body {
     margin-top: 4px;
 }
 
+.message-citations .citation-header {
+    font-weight: 600;
+}
+
+.message-citations .citation-body {
+    white-space: pre-wrap;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+/* Thinking indicator */
+.thinking-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-style: italic;
+}
+
+/* Pipeline status */
+.pipeline-status {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 4px 0;
+}
+
+.pipeline-stage {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+    transition: color 0.2s;
+}
+
+.pipeline-stage .stage-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+    text-align: center;
+}
+
+.pipeline-stage .stage-icon .spinner {
+    width: 12px;
+    height: 12px;
+}
+
+.pipeline-stage.active {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.pipeline-stage.completed {
+    color: var(--success);
+}
+
 /* Input area */
 #input-area {
     padding: 16px 20px;

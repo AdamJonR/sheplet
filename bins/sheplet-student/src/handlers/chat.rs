@@ -144,8 +144,8 @@ async fn chat_sync(
     })?;
 
     // Prepare prompt
-    let prepared = active
-        .pipeline
+    let pipeline = active.pipeline.read().await;
+    let prepared = pipeline
         .prepare_prompt(&req.message, &conv.messages[..conv.messages.len().saturating_sub(1)])
         .await
         .map_err(|e| {
@@ -156,6 +156,7 @@ async fn chat_sync(
                 }),
             )
         })?;
+    drop(pipeline);
 
     match prepared {
         PreparedQuery::Blocked { message } => {
@@ -256,110 +257,122 @@ async fn chat_stream(
         )
     })?;
 
-    let prepared = active
-        .pipeline
-        .prepare_prompt(&req.message, &conv.messages[..conv.messages.len().saturating_sub(1)])
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    // Clone what we need, then drop the read lock so SSE can start immediately
+    let pipeline = active.pipeline.clone();
+    let generator = active.generator.clone();
+    let message = req.message.clone();
+    let history: Vec<Message> = conv.messages[..conv.messages.len().saturating_sub(1)].to_vec();
+    drop(courses);
 
-    let (citations, receiver) = match prepared {
-        PreparedQuery::Blocked { message } => {
-            let assistant_msg = Message {
-                role: Role::Assistant,
-                content: message.clone(),
-                timestamp: now_iso(),
-                citations: vec![],
-            };
-            let _ = state.conversations.append_message(&conv_id, assistant_msg);
-
-            // Send blocked message as a single SSE event
-            let (tx, rx) = std::sync::mpsc::channel();
-            let _ = tx.send(Ok(message));
-            drop(tx);
-            return Ok(Sse::new(sse_from_receiver(rx, vec![], conv_id, state.clone(), true)));
-        }
-        PreparedQuery::Ready { prompt, citations } => {
-            let mut generator = active.generator.lock().unwrap();
-            let rx = generator.generate_stream(&prompt, 512).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
-            (citations, rx)
-        }
-    };
-
-    Ok(Sse::new(sse_from_receiver(receiver, citations, conv_id, state.clone(), false)))
-}
-
-fn sse_from_receiver(
-    receiver: std::sync::mpsc::Receiver<rag::Result<String>>,
-    citations: Vec<Citation>,
-    conv_id: String,
-    state: Arc<AppState>,
-    blocked: bool,
-) -> impl Stream<Item = Result<Event, Infallible>> {
-    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(100);
 
     tokio::spawn(async move {
-        let mut full_response = String::new();
-        while let Ok(result) = receiver.recv() {
-            match result {
-                Ok(token) => {
-                    full_response.push_str(&token);
-                    let event = Event::default().data(&token);
-                    if tx.send(Ok(event)).await.is_err() {
-                        break;
+        // Status: embedding
+        let _ = tx.send(Ok(Event::default().event("status").data("embedding"))).await;
+
+        let pipeline_guard = pipeline.read().await;
+        let query_vec = match pipeline_guard.embed_query(&message) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tx.send(Ok(Event::default().event("error").data(e.to_string()))).await;
+                let done_data = serde_json::json!({
+                    "conversation_id": conv_id,
+                    "blocked": false,
+                });
+                let _ = tx.send(Ok(Event::default().event("done").data(done_data.to_string()))).await;
+                return;
+            }
+        };
+
+        // Status: searching
+        let _ = tx.send(Ok(Event::default().event("status").data("searching"))).await;
+
+        let results = match pipeline_guard.search_chunks(&query_vec).await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(Ok(Event::default().event("error").data(e.to_string()))).await;
+                let done_data = serde_json::json!({
+                    "conversation_id": conv_id,
+                    "blocked": false,
+                });
+                let _ = tx.send(Ok(Event::default().event("done").data(done_data.to_string()))).await;
+                return;
+            }
+        };
+
+        let prepared = pipeline_guard.assemble_from_results(&results, &history, &message);
+        drop(pipeline_guard);
+
+        match prepared {
+            PreparedQuery::Blocked { message: blocked_msg } => {
+                let assistant_msg = Message {
+                    role: Role::Assistant,
+                    content: blocked_msg.clone(),
+                    timestamp: now_iso(),
+                    citations: vec![],
+                };
+                let _ = state.conversations.append_message(&conv_id, assistant_msg);
+
+                let _ = tx.send(Ok(Event::default().event("status").data("generating"))).await;
+                let _ = tx.send(Ok(Event::default().data(&blocked_msg))).await;
+                let done_data = serde_json::json!({
+                    "conversation_id": conv_id,
+                    "blocked": true,
+                });
+                let _ = tx.send(Ok(Event::default().event("done").data(done_data.to_string()))).await;
+            }
+            PreparedQuery::Ready { prompt, citations } => {
+                // Status: generating
+                let _ = tx.send(Ok(Event::default().event("status").data("generating"))).await;
+
+                // Send citations early
+                if !citations.is_empty() {
+                    let citations_json = serde_json::to_string(&citations).unwrap_or_default();
+                    let _ = tx.send(Ok(Event::default().event("citations").data(citations_json))).await;
+                }
+
+                // Generate tokens
+                let (token_tx, token_rx) = std::sync::mpsc::channel::<rag::Result<String>>();
+                let gen_clone = generator.clone();
+                tokio::task::spawn_blocking(move || {
+                    let mut locked = gen_clone.lock().unwrap();
+                    let _ = locked.generate_to_sender(&prompt, 512, token_tx);
+                });
+
+                let mut full_response = String::new();
+                while let Ok(result) = token_rx.recv() {
+                    match result {
+                        Ok(token) => {
+                            full_response.push_str(&token);
+                            if tx.send(Ok(Event::default().data(&token))).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Ok(Event::default().event("error").data(e.to_string()))).await;
+                            break;
+                        }
                     }
                 }
-                Err(e) => {
-                    let event = Event::default()
-                        .event("error")
-                        .data(e.to_string());
-                    let _ = tx.send(Ok(event)).await;
-                    break;
-                }
+
+                // Done event
+                let done_data = serde_json::json!({
+                    "conversation_id": conv_id,
+                    "blocked": false,
+                });
+                let _ = tx.send(Ok(Event::default().event("done").data(done_data.to_string()))).await;
+
+                // Save assistant message
+                let assistant_msg = Message {
+                    role: Role::Assistant,
+                    content: full_response,
+                    timestamp: now_iso(),
+                    citations,
+                };
+                let _ = state.conversations.append_message(&conv_id, assistant_msg);
             }
         }
-
-        // Send citations as a final event
-        if !citations.is_empty() {
-            let citations_json = serde_json::to_string(&citations).unwrap_or_default();
-            let event = Event::default()
-                .event("citations")
-                .data(citations_json);
-            let _ = tx.send(Ok(event)).await;
-        }
-
-        // Send done event
-        let done_data = serde_json::json!({
-            "conversation_id": conv_id,
-            "blocked": blocked,
-        });
-        let event = Event::default()
-            .event("done")
-            .data(done_data.to_string());
-        let _ = tx.send(Ok(event)).await;
-
-        // Save assistant message
-        let assistant_msg = Message {
-            role: Role::Assistant,
-            content: full_response,
-            timestamp: now_iso(),
-            citations,
-        };
-        let _ = state.conversations.append_message(&conv_id, assistant_msg);
     });
 
-    tokio_stream::wrappers::ReceiverStream::new(rx)
+    Ok(Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
 }

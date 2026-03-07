@@ -43,7 +43,8 @@ async fn get_settings(
             }),
         )
     })?;
-    let config = active.pipeline.config();
+    let pipeline = active.pipeline.read().await;
+    let config = pipeline.config();
     Ok(Json(SettingsResponse {
         retrieval_strategy: config.retrieval_strategy.clone(),
         top_k: config.top_k,
@@ -98,8 +99,8 @@ async fn update_settings(
         }
     }
 
-    let mut courses = state.courses.write().await;
-    let active = courses.active_mut().ok_or_else(|| {
+    let courses = state.courses.read().await;
+    let active = courses.active().ok_or_else(|| {
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -107,7 +108,7 @@ async fn update_settings(
             }),
         )
     })?;
-    active.pipeline.update_settings(
+    active.pipeline.write().await.update_settings(
         req.retrieval_strategy,
         req.top_k,
         req.relevance_threshold,

@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use bundle::Manifest;
 use candle_core::Device;
 use rag::{PhiGenerator, RagConfig, RagPipeline};
 use serde::Serialize;
+use tokio::sync::RwLock;
 
 pub struct CourseMetadata {
     pub manifest: Manifest,
@@ -16,8 +17,8 @@ pub struct CourseMetadata {
 
 pub struct LoadedCourse {
     pub metadata: CourseMetadata,
-    pub pipeline: RagPipeline,
-    pub generator: Mutex<PhiGenerator>,
+    pub pipeline: Arc<RwLock<RagPipeline>>,
+    pub generator: Arc<Mutex<PhiGenerator>>,
 }
 
 pub struct CourseManager {
@@ -123,8 +124,8 @@ impl CourseManager {
 
         self.active = Some(LoadedCourse {
             metadata,
-            pipeline,
-            generator: Mutex::new(generator),
+            pipeline: Arc::new(RwLock::new(pipeline)),
+            generator: Arc::new(Mutex::new(generator)),
         });
         self.active_id = Some(course_id.to_string());
 
@@ -164,9 +165,5 @@ impl CourseManager {
 
     pub fn active(&self) -> Option<&LoadedCourse> {
         self.active.as_ref()
-    }
-
-    pub fn active_mut(&mut self) -> Option<&mut LoadedCourse> {
-        self.active.as_mut()
     }
 }

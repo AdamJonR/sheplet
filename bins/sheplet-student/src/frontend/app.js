@@ -236,7 +236,14 @@ function appendMessage(role, content, citations, blocked) {
         citations.forEach(c => {
             const citeDiv = document.createElement('div');
             citeDiv.className = 'citation';
-            citeDiv.textContent = `${c.source_file} (chunk ${c.chunk_index}): ${c.text_snippet.substring(0, 100)}`;
+            const header = document.createElement('div');
+            header.className = 'citation-header';
+            header.textContent = `${c.source_file} (chunk ${c.chunk_index})`;
+            citeDiv.appendChild(header);
+            const body = document.createElement('div');
+            body.className = 'citation-body';
+            body.textContent = c.text_snippet || '';
+            citeDiv.appendChild(body);
             details.appendChild(citeDiv);
         });
         div.appendChild(details);
@@ -266,8 +273,20 @@ async function sendMessage() {
     appendMessage('user', text, null, false);
     scrollToBottom();
 
-    // Create assistant message placeholder
+    // Create assistant message placeholder with pipeline status indicator
     const assistantContent = appendMessage('assistant', '', null, false);
+    assistantContent.innerHTML = '';
+    const statusBar = document.createElement('div');
+    statusBar.className = 'pipeline-status';
+    const stages = ['Embedding', 'Searching', 'Generating'];
+    stages.forEach(stage => {
+        const span = document.createElement('span');
+        span.className = 'pipeline-stage';
+        span.dataset.stage = stage.toLowerCase();
+        span.innerHTML = `<span class="stage-icon">&#9675;</span> ${stage}`;
+        statusBar.appendChild(span);
+    });
+    assistantContent.appendChild(statusBar);
     let fullResponse = '';
     let citations = [];
 
@@ -311,6 +330,26 @@ async function sendMessage() {
                 if (line.startsWith('data: ')) {
                     const data = line.substring(6);
 
+                    if (currentEventType === 'status') {
+                        const pipelineStatus = assistantContent.querySelector('.pipeline-status');
+                        if (pipelineStatus) {
+                            pipelineStatus.querySelectorAll('.pipeline-stage').forEach(el => {
+                                const stage = el.dataset.stage;
+                                if (stage === data) {
+                                    el.classList.add('active');
+                                    el.classList.remove('completed');
+                                    el.querySelector('.stage-icon').innerHTML = '<span class="spinner"></span>';
+                                } else if (el.classList.contains('active')) {
+                                    el.classList.remove('active');
+                                    el.classList.add('completed');
+                                    el.querySelector('.stage-icon').innerHTML = '&#10003;';
+                                }
+                            });
+                        }
+                        currentEventType = null;
+                        continue;
+                    }
+
                     if (currentEventType === 'done') {
                         try {
                             const parsed = JSON.parse(data);
@@ -337,7 +376,14 @@ async function sendMessage() {
                             citations.forEach(c => {
                                 const citeDiv = document.createElement('div');
                                 citeDiv.className = 'citation';
-                                citeDiv.textContent = `${c.source_file} (chunk ${c.chunk_index}): ${(c.text_snippet || '').substring(0, 100)}`;
+                                const header = document.createElement('div');
+                                header.className = 'citation-header';
+                                header.textContent = `${c.source_file} (chunk ${c.chunk_index})`;
+                                citeDiv.appendChild(header);
+                                const body = document.createElement('div');
+                                body.className = 'citation-body';
+                                body.textContent = c.text_snippet || '';
+                                citeDiv.appendChild(body);
                                 details.appendChild(citeDiv);
                             });
                             msgDiv.appendChild(details);
@@ -354,6 +400,9 @@ async function sendMessage() {
                     }
 
                     // Default: text token
+                    if (!fullResponse) {
+                        assistantContent.innerHTML = ''; // Remove thinking indicator
+                    }
                     fullResponse += data;
                     assistantContent.textContent = fullResponse;
                     scrollToBottom();
