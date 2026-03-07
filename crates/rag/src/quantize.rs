@@ -108,6 +108,7 @@ fn read_phi_config(model_dir: &Path) -> Result<PhiParams> {
         as f32;
     let rope_theta = config["rope_theta"].as_f64().unwrap_or(10000.0) as f32;
     let tie_word_embeddings = config["tie_word_embeddings"].as_bool().unwrap_or(false);
+    let partial_rotary_factor = config["partial_rotary_factor"].as_f64().unwrap_or(1.0) as f32;
 
     let head_dim = hidden_size / num_attention_heads;
 
@@ -123,6 +124,7 @@ fn read_phi_config(model_dir: &Path) -> Result<PhiParams> {
         rope_theta,
         head_dim,
         tie_word_embeddings,
+        partial_rotary_factor,
     })
 }
 
@@ -138,6 +140,7 @@ struct PhiParams {
     rope_theta: f32,
     head_dim: u32,
     tie_word_embeddings: bool,
+    partial_rotary_factor: f32,
 }
 
 /// Quantize SafeTensors model files to a single GGUF file.
@@ -230,7 +233,8 @@ pub fn quantize_safetensors_to_gguf(
     let context_length = Value::U32(params.max_position_embeddings);
     let feed_forward_length = Value::U32(params.intermediate_size);
     let rms_eps = Value::F32(params.rms_norm_eps);
-    let rope_dim = Value::U32(params.head_dim);
+    let effective_rope_dim = (params.head_dim as f32 * params.partial_rotary_factor) as u32;
+    let rope_dim = Value::U32(effective_rope_dim);
     let rope_freq = Value::F32(params.rope_theta);
     let vocab_size = Value::U32(params.vocab_size);
 
@@ -398,6 +402,17 @@ mod tests {
         // Verify we can dequantize back
         let recovered = qtensor.dequantize(&device).unwrap();
         assert_eq!(recovered.shape().dims(), &[64, 64]);
+    }
+
+    #[test]
+    fn test_partial_rotary_rope_dim() {
+        // Phi-4-mini: partial_rotary_factor=0.75, head_dim=128 -> rope_dim=96
+        let rope_dim = (128_f32 * 0.75) as u32;
+        assert_eq!(rope_dim, 96);
+
+        // Full rotary: partial_rotary_factor=1.0, head_dim=96 -> rope_dim=96
+        let rope_dim = (96_f32 * 1.0) as u32;
+        assert_eq!(rope_dim, 96);
     }
 
     #[test]

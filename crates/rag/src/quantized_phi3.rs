@@ -70,6 +70,7 @@ struct LayerWeights {
     cos: Tensor,
     sin: Tensor,
     neg_inf: Tensor,
+    rope_dim: usize,
     kv_cache: KvCache,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
@@ -84,10 +85,18 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 impl LayerWeights {
     fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
-        let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
+        let (_b_sz, _h, seq_len, n_embd) = xs.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
+        if self.rope_dim < n_embd {
+            // Partial rotary: apply RoPE only to first rope_dim dimensions
+            let x_rope = xs.narrow(D::Minus1, 0, self.rope_dim)?.contiguous()?;
+            let x_pass = xs.narrow(D::Minus1, self.rope_dim, n_embd - self.rope_dim)?;
+            let x_rope = candle_nn::rotary_emb::rope(&x_rope, &cos, &sin)?;
+            Tensor::cat(&[x_rope, x_pass], D::Minus1)
+        } else {
+            candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
+        }
     }
 
     fn forward_attn(
@@ -160,6 +169,7 @@ pub struct ModelWeights {
     output_norm: RmsNorm,
     output: QLinear,
     masks: HashMap<usize, Tensor>,
+    max_seq_len: usize,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -252,6 +262,7 @@ impl ModelWeights {
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
+                rope_dim,
                 kv_cache,
                 span_attn,
                 span_rot,
@@ -265,6 +276,7 @@ impl ModelWeights {
             output_norm,
             output,
             masks: HashMap::new(),
+            max_seq_len,
             span,
             span_output,
         })
@@ -309,7 +321,7 @@ impl ModelWeights {
 
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
-            layer.kv_cache = KvCache::new(2, 131072);
+            layer.kv_cache = KvCache::new(2, self.max_seq_len);
         }
     }
 }
