@@ -16,6 +16,12 @@ pub trait TextGenerator: Send {
         prompt: &str,
         max_tokens: usize,
     ) -> Result<mpsc::Receiver<Result<String>>>;
+    fn generate_to_sender(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        tx: mpsc::Sender<Result<String>>,
+    ) -> Result<()>;
     fn clear_cache(&mut self);
 }
 
@@ -134,7 +140,7 @@ impl PhiGenerator {
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-        let next_token = sample_token(&logits, 0.7, 0.9)?;
+        let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if next_token == self.eos_token_id {
             return Ok(generated);
@@ -146,7 +152,7 @@ impl PhiGenerator {
             let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-            let next_token = sample_token(&logits, 0.7, 0.9)?;
+            let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &generated)?;
 
             if next_token == self.eos_token_id {
                 break;
@@ -178,6 +184,17 @@ impl TextGenerator for PhiGenerator {
         prompt: &str,
         max_tokens: usize,
     ) -> Result<mpsc::Receiver<Result<String>>> {
+        let (tx, rx) = mpsc::channel();
+        self.generate_to_sender(prompt, max_tokens, tx)?;
+        Ok(rx)
+    }
+
+    fn generate_to_sender(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        tx: mpsc::Sender<Result<String>>,
+    ) -> Result<()> {
         self.model.clear_kv_cache();
         let encoding = self
             .tokenizer
@@ -189,18 +206,15 @@ impl TextGenerator for PhiGenerator {
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-        let first_token = sample_token(&logits, 0.7, 0.9)?;
-
-        let tokenizer = self.tokenizer.clone();
-        let (tx, rx) = mpsc::channel();
+        let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if first_token == self.eos_token_id {
-            drop(tx);
-            return Ok(rx);
+            return Ok(());
         }
 
         tokens.push(first_token);
 
+        let tokenizer = self.tokenizer.clone();
         let mut prev_text = match tokenizer.decode(&[first_token], true) {
             Ok(text) => {
                 let _ = tx.send(Ok(text.clone()));
@@ -208,7 +222,7 @@ impl TextGenerator for PhiGenerator {
             }
             Err(e) => {
                 let _ = tx.send(Err(RagError::Tokenizer(e.to_string())));
-                return Ok(rx);
+                return Ok(());
             }
         };
 
@@ -218,7 +232,7 @@ impl TextGenerator for PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-            let next_token = sample_token(&logits, 0.7, 0.9)?;
+            let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &all_generated)?;
 
             if next_token == self.eos_token_id {
                 break;
@@ -244,7 +258,7 @@ impl TextGenerator for PhiGenerator {
             }
         }
 
-        Ok(rx)
+        Ok(())
     }
 
     fn clear_cache(&mut self) {
@@ -252,15 +266,27 @@ impl TextGenerator for PhiGenerator {
     }
 }
 
-fn sample_token(logits: &Tensor, temperature: f64, top_p: f64) -> Result<u32> {
-    let logits = logits.to_vec1::<f32>()?;
-    let last_logits = if logits.len() > 1 {
-        &logits[logits.len() - logits.len()..]
-    } else {
-        &logits
-    };
+fn sample_token(
+    logits: &Tensor,
+    temperature: f64,
+    top_p: f64,
+    repetition_penalty: f64,
+    generated_tokens: &[u32],
+) -> Result<u32> {
+    let mut logits = logits.to_vec1::<f32>()?;
 
-    let scaled: Vec<f64> = last_logits.iter().map(|&l| l as f64 / temperature).collect();
+    // Apply repetition penalty to previously generated tokens
+    for &token_id in generated_tokens {
+        if let Some(logit) = logits.get_mut(token_id as usize) {
+            if *logit > 0.0 {
+                *logit /= repetition_penalty as f32;
+            } else {
+                *logit *= repetition_penalty as f32;
+            }
+        }
+    }
+
+    let scaled: Vec<f64> = logits.iter().map(|&l| l as f64 / temperature).collect();
 
     let max_val = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let exps: Vec<f64> = scaled.iter().map(|&l| (l - max_val).exp()).collect();
