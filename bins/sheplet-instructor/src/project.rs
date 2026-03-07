@@ -62,7 +62,7 @@ impl Default for CourseConfig {
             system_prompt: "You are a helpful tutor. Answer only from the provided course materials.".to_string(),
             retrieval_strategy: "top-k".to_string(),
             top_k: 5,
-            relevance_threshold: 0.7,
+            relevance_threshold: 0.3,
             mmr_lambda: 0.5,
         }
     }

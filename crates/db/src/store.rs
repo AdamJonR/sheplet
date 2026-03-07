@@ -199,9 +199,11 @@ impl VectorStore {
             let mut best_score = f32::NEG_INFINITY;
 
             for (i, (result, vec)) in remaining.iter().enumerate() {
-                // Relevance: lower distance = more relevant. Convert to a
-                // similarity-like score by negating so higher is better.
-                let relevance = -result.score;
+                // Convert squared L2 distance to cosine similarity (for
+                // L2-normalized vectors: cosine_sim = 1 - distance/2).
+                // This puts relevance on the same [0,1] scale as the
+                // diversity term (cosine_similarity on line 212).
+                let relevance = 1.0 - result.score / 2.0;
 
                 // Max cosine similarity to any already-selected result.
                 let max_sim = if selected.is_empty() {

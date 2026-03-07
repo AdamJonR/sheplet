@@ -3,10 +3,21 @@ use std::path::Path;
 use conversations::{Citation, Message};
 use db::VectorStore;
 use embeddings::EmbeddingModel;
+use tracing::debug;
 
 use crate::config::RagConfig;
 use crate::error::Result;
 use crate::prompt::assemble_prompt;
+
+/// Convert squared L2 distance to cosine similarity.
+///
+/// LanceDB returns squared L2 distance. For L2-normalized (unit-norm) vectors:
+///   squared_l2 = 2(1 - cosine_similarity)
+/// Therefore:
+///   cosine_similarity = 1.0 - squared_l2 / 2.0
+fn squared_l2_to_cosine_similarity(distance: f64) -> f64 {
+    1.0 - distance / 2.0
+}
 
 pub enum PreparedQuery {
     Ready {
@@ -40,26 +51,41 @@ impl RagPipeline {
         })
     }
 
-    pub async fn prepare_prompt(
-        &self,
-        question: &str,
-        history: &[Message],
-    ) -> Result<PreparedQuery> {
-        let query_vec = self.embedder.embed(question)?;
-        let strategy = self.config.to_retrieval_strategy();
-        let results = self.store.search(&query_vec, &strategy).await?;
+    /// Embed a query string into a vector.
+    pub fn embed_query(&self, question: &str) -> Result<Vec<f32>> {
+        Ok(self.embedder.embed(question)?)
+    }
 
-        // Check relevance: LanceDB returns L2 distance (lower = closer)
-        // Convert: similarity = 1.0 / (1.0 + distance)
+    /// Search the vector store for relevant chunks.
+    pub async fn search_chunks(&self, query_vec: &[f32]) -> Result<Vec<db::SearchResult>> {
+        let strategy = self.config.to_retrieval_strategy();
+        Ok(self.store.search(query_vec, &strategy).await?)
+    }
+
+    /// Check relevance, build citations, and assemble prompt from search results.
+    pub fn assemble_from_results(
+        &self,
+        results: &[db::SearchResult],
+        history: &[Message],
+        question: &str,
+    ) -> PreparedQuery {
         let any_relevant = results.iter().any(|r| {
-            let similarity = 1.0 / (1.0 + r.score as f64);
+            let similarity = squared_l2_to_cosine_similarity(r.score as f64);
+            debug!(
+                source = %r.source_file,
+                chunk = r.chunk_index,
+                distance = r.score,
+                similarity,
+                threshold = self.config.relevance_threshold,
+                "retrieval score"
+            );
             similarity >= self.config.relevance_threshold
         });
 
         if !any_relevant && !results.is_empty() {
-            return Ok(PreparedQuery::Blocked {
+            return PreparedQuery::Blocked {
                 message: "I don't have enough relevant course materials to answer this question. Please ask something related to the course content.".to_string(),
-            });
+            };
         }
 
         let citations: Vec<Citation> = results
@@ -67,13 +93,23 @@ impl RagPipeline {
             .map(|r| Citation {
                 source_file: r.source_file.clone(),
                 chunk_index: r.chunk_index,
-                text_snippet: r.text.chars().take(200).collect(),
+                text_snippet: r.text.clone(),
             })
             .collect();
 
-        let prompt = assemble_prompt(&self.config.system_prompt, &results, history, question);
+        let prompt = assemble_prompt(&self.config.system_prompt, results, history, question);
 
-        Ok(PreparedQuery::Ready { prompt, citations })
+        PreparedQuery::Ready { prompt, citations }
+    }
+
+    pub async fn prepare_prompt(
+        &self,
+        question: &str,
+        history: &[Message],
+    ) -> Result<PreparedQuery> {
+        let query_vec = self.embed_query(question)?;
+        let results = self.search_chunks(&query_vec).await?;
+        Ok(self.assemble_from_results(&results, history, question))
     }
 
     pub fn update_settings(
@@ -99,5 +135,25 @@ impl RagPipeline {
 
     pub fn config(&self) -> &RagConfig {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_squared_l2_to_cosine_similarity() {
+        // Distance 0.0 = identical vectors → similarity 1.0
+        assert!((squared_l2_to_cosine_similarity(0.0) - 1.0).abs() < 1e-10);
+
+        // Distance 2.0 = orthogonal vectors → similarity 0.0
+        assert!((squared_l2_to_cosine_similarity(2.0) - 0.0).abs() < 1e-10);
+
+        // Distance 1.0 → similarity 0.5
+        assert!((squared_l2_to_cosine_similarity(1.0) - 0.5).abs() < 1e-10);
+
+        // Distance 4.0 = opposite vectors → similarity -1.0
+        assert!((squared_l2_to_cosine_similarity(4.0) - (-1.0)).abs() < 1e-10);
     }
 }
