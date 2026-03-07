@@ -4,6 +4,11 @@ use std::path::Path;
 
 use crate::error::FinetuneError;
 
+/// Maximum number of training examples to load from a JSONL file.
+const MAX_EXAMPLES: usize = 100_000;
+/// Maximum size of a single JSONL line (1 MB).
+const MAX_LINE_SIZE: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DpoExample {
     pub prompt: String,
@@ -23,8 +28,18 @@ pub fn load_dpo_data(path: impl AsRef<Path>) -> Result<Vec<DpoExample>, Finetune
     let reader = std::io::BufReader::new(file);
     let mut examples = Vec::new();
     for (line_num, line) in reader.lines().enumerate() {
+        if examples.len() >= MAX_EXAMPLES {
+            break;
+        }
         let line =
             line.map_err(|e| FinetuneError::DataLoading(format!("line {}: {e}", line_num + 1)))?;
+        if line.len() > MAX_LINE_SIZE {
+            return Err(FinetuneError::DataLoading(format!(
+                "line {}: exceeds maximum line size of {} bytes",
+                line_num + 1,
+                MAX_LINE_SIZE
+            )));
+        }
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
@@ -42,8 +57,18 @@ pub fn load_sft_data(path: impl AsRef<Path>) -> Result<Vec<SftExample>, Finetune
     let reader = std::io::BufReader::new(file);
     let mut examples = Vec::new();
     for (line_num, line) in reader.lines().enumerate() {
+        if examples.len() >= MAX_EXAMPLES {
+            break;
+        }
         let line =
             line.map_err(|e| FinetuneError::DataLoading(format!("line {}: {e}", line_num + 1)))?;
+        if line.len() > MAX_LINE_SIZE {
+            return Err(FinetuneError::DataLoading(format!(
+                "line {}: exceeds maximum line size of {} bytes",
+                line_num + 1,
+                MAX_LINE_SIZE
+            )));
+        }
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;

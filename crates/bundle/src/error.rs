@@ -4,6 +4,8 @@ pub enum BundleError {
     Io(#[from] std::io::Error),
     #[error("signature verification failed")]
     SignatureInvalid,
+    #[error("untrusted public key: expected fingerprint {expected}, got {actual}")]
+    UntrustedKey { expected: String, actual: String },
     #[error("missing required file in bundle: {0}")]
     MissingEntry(String),
     #[error("invalid manifest: {0}")]

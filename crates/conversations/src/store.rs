@@ -75,7 +75,8 @@ impl ConversationStore {
         for item in self.db.iter() {
             let (key, value) = item?;
             let key_str = String::from_utf8_lossy(&key);
-            if key_str.ends_with(&format!(":{id}")) {
+            // Split on first ':' and match the ID portion exactly
+            if key_str.split_once(':').is_some_and(|(_, key_id)| key_id == id) {
                 let conv: Conversation = serde_json::from_slice(&value)?;
                 return Ok(Some(conv));
             }
@@ -88,7 +89,8 @@ impl ConversationStore {
         for item in self.db.iter() {
             let (key, value) = item?;
             let key_str = String::from_utf8_lossy(&key);
-            if key_str.ends_with(&format!(":{id}")) {
+            // Split on first ':' and match the ID portion exactly
+            if key_str.split_once(':').is_some_and(|(_, key_id)| key_id == id) {
                 let mut conv: Conversation = serde_json::from_slice(&value)?;
                 conv.updated_at = now_iso();
                 conv.messages.push(msg);
@@ -127,7 +129,8 @@ impl ConversationStore {
         for item in self.db.iter() {
             let (key, _value) = item?;
             let key_str = String::from_utf8_lossy(&key);
-            if key_str.ends_with(&format!(":{id}")) {
+            // Split on first ':' and match the ID portion exactly
+            if key_str.split_once(':').is_some_and(|(_, key_id)| key_id == id) {
                 self.db.remove(key)?;
                 return Ok(());
             }

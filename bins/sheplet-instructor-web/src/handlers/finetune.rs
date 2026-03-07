@@ -49,6 +49,14 @@ async fn start_finetune(
         return Err(err(StatusCode::BAD_REQUEST, "Method must be 'sft' or 'dpo'"));
     }
 
+    // Validate data_file: reject path traversal
+    if body.data_file.contains('/')
+        || body.data_file.contains('\\')
+        || body.data_file.contains("..")
+    {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid data file name"));
+    }
+
     let dirs = project_dirs(&project_path);
     let data_path = dirs.finetune_data.join(&body.data_file);
     if !data_path.exists() {

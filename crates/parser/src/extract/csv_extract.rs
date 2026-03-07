@@ -5,6 +5,9 @@ use crate::extract::FileFormat;
 use crate::{Chunk, ChunkConfig};
 use std::path::Path;
 
+/// Maximum number of rows to process from a CSV file.
+const MAX_CSV_ROWS: usize = 500_000;
+
 /// Extract text from a CSV file (for use with text-splitter chunking).
 pub fn extract_csv_text(path: &Path) -> Result<(String, Vec<ParseWarning>), ParserError> {
     let mut reader =
@@ -31,7 +34,10 @@ pub fn extract_csv_text(path: &Path) -> Result<(String, Vec<ParseWarning>), Pars
     all_text.push_str(&headers.join(" | "));
     all_text.push('\n');
 
-    for record in reader.records() {
+    for (row_idx, record) in reader.records().enumerate() {
+        if row_idx >= MAX_CSV_ROWS {
+            break;
+        }
         let record = record.map_err(|e| ParserError::CsvError {
             path: path.display().to_string(),
             message: e.to_string(),
@@ -73,6 +79,9 @@ pub fn extract_csv_rows(
     let mut chunks = Vec::new();
 
     for (row_idx, record) in reader.records().enumerate() {
+        if row_idx >= MAX_CSV_ROWS {
+            break;
+        }
         let record = record.map_err(|e| ParserError::CsvError {
             path: path.display().to_string(),
             message: e.to_string(),

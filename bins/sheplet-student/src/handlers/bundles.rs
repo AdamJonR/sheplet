@@ -11,6 +11,7 @@ use crate::app_state::AppState;
 #[derive(Deserialize)]
 pub struct LoadBundleRequest {
     path: String,
+    trusted_fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -33,7 +34,10 @@ async fn load_bundle(
     Json(req): Json<LoadBundleRequest>,
 ) -> Result<Json<LoadBundleResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut courses = state.courses.write().await;
-    match courses.load_bundle(&req.path, &state.base_dir).await {
+    match courses
+        .load_bundle(&req.path, &state.base_dir, req.trusted_fingerprint.as_deref())
+        .await
+    {
         Ok(course_id) => Ok(Json(LoadBundleResponse {
             message: format!("Bundle loaded successfully as '{course_id}'"),
             course_id,

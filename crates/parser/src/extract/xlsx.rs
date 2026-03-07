@@ -6,6 +6,9 @@ use crate::{Chunk, ChunkConfig};
 use calamine::{Reader, open_workbook_auto};
 use std::path::Path;
 
+/// Maximum number of rows to process from an Excel file.
+const MAX_XLSX_ROWS: usize = 500_000;
+
 /// Extract text from an Excel file (for use with text-splitter chunking).
 /// This concatenates all sheets into a single text block.
 pub fn extract_xlsx_text(path: &Path) -> Result<(String, Vec<ParseWarning>), ParserError> {
@@ -17,16 +20,24 @@ pub fn extract_xlsx_text(path: &Path) -> Result<(String, Vec<ParseWarning>), Par
     let mut all_text = String::new();
     let sheet_names: Vec<String> = workbook.sheet_names().to_vec();
 
+    let mut total_rows = 0;
     for name in &sheet_names {
         if let Ok(range) = workbook.worksheet_range(name) {
             for row in range.rows() {
+                if total_rows >= MAX_XLSX_ROWS {
+                    break;
+                }
                 let cells: Vec<String> = row
                     .iter()
                     .map(|cell| format!("{}", cell))
                     .collect();
                 all_text.push_str(&cells.join(" | "));
                 all_text.push('\n');
+                total_rows += 1;
             }
+        }
+        if total_rows >= MAX_XLSX_ROWS {
+            break;
         }
     }
 
@@ -48,10 +59,12 @@ pub fn extract_xlsx_rows(
     let sheet_names: Vec<String> = workbook.sheet_names().to_vec();
     let file_path_str = path.display().to_string();
 
+    let mut total_rows = 0;
     for sheet_name in &sheet_names {
         if let Ok(range) = workbook.worksheet_range(sheet_name) {
             let rows: Vec<Vec<String>> = range
                 .rows()
+                .take(MAX_XLSX_ROWS + 1) // +1 for header
                 .map(|row| row.iter().map(|cell| format!("{}", cell)).collect())
                 .collect();
 
@@ -63,6 +76,10 @@ pub fn extract_xlsx_rows(
             let mut chunk_index = 0;
 
             for (row_idx, row) in rows.iter().enumerate().skip(1) {
+                if total_rows >= MAX_XLSX_ROWS {
+                    break;
+                }
+                total_rows += 1;
                 let parts: Vec<String> = headers
                     .iter()
                     .zip(row.iter())

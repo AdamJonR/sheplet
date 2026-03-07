@@ -8,7 +8,7 @@ pub use error::BundleError;
 pub use keys::Keypair;
 pub use manifest::Manifest;
 pub use pack::pack;
-pub use unpack::verify_and_unpack;
+pub use unpack::{verify_and_unpack, verify_and_unpack_trusted};
 
 #[cfg(test)]
 mod tests {

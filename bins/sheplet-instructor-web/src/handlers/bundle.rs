@@ -44,6 +44,15 @@ async fn start_bundle(
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
     let output = std::path::PathBuf::from(&body.output_path);
+    // Validate output path: must have .sheplet extension and parent must exist
+    if output.extension().and_then(|e| e.to_str()) != Some("sheplet") {
+        return Err(err(StatusCode::BAD_REQUEST, "Output path must have .sheplet extension"));
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(err(StatusCode::BAD_REQUEST, "Output directory does not exist"));
+        }
+    }
     let bump = body.bump_version.unwrap_or(false);
 
     let (task_id, tx) = state.tasks.create_task("bundle").await;

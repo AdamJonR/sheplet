@@ -46,6 +46,9 @@ async fn start_ingest(
     if !sources.exists() {
         return Err(err(StatusCode::BAD_REQUEST, "Sources directory does not exist"));
     }
+    if !sources.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "Sources path must be a directory"));
+    }
 
     let (task_id, tx) = state.tasks.create_task("ingest").await;
     let tasks = state.tasks.clone();

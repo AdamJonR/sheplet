@@ -42,12 +42,37 @@ pub fn detect_format(path: &std::path::Path) -> Option<FileFormat> {
     }
 }
 
+/// Maximum input file size (1 GB) to prevent decompression bombs and memory exhaustion.
+const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+
+/// Check that a file doesn't exceed the size limit.
+pub fn check_file_size(path: &std::path::Path) -> Result<(), crate::error::ParserError> {
+    let metadata = std::fs::metadata(path).map_err(|e| crate::error::ParserError::ReadError {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(crate::error::ParserError::ReadError {
+            path: path.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "file exceeds maximum size of {} MB",
+                    MAX_FILE_SIZE / (1024 * 1024)
+                ),
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Extract raw text from a file based on its format.
 /// Returns the extracted text and any warnings.
 pub fn extract_text(
     path: &std::path::Path,
     format: FileFormat,
 ) -> Result<(String, Vec<crate::ParseWarning>), crate::error::ParserError> {
+    check_file_size(path)?;
     match format {
         FileFormat::Pdf => pdf::extract_pdf(path),
         FileFormat::Docx => docx::extract_docx(path),

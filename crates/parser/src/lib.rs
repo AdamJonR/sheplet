@@ -83,6 +83,9 @@ pub fn parse_file(
         path: path.display().to_string(),
     })?;
 
+    // Check file size before processing (prevents decompression bombs and memory exhaustion)
+    extract::check_file_size(path)?;
+
     // CSV and Excel use row-based chunking
     match format {
         FileFormat::Csv => return extract::csv_extract::extract_csv_rows(path, config),

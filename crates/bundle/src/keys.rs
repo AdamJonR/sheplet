@@ -52,6 +52,14 @@ impl Keypair {
             let json = serde_json::to_string_pretty(&stored)?;
             std::fs::write(path, json)?;
 
+            // Restrict file permissions to owner-only (0600) to protect the private key
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o600);
+                std::fs::set_permissions(path, perms)?;
+            }
+
             Ok(keypair)
         }
     }
