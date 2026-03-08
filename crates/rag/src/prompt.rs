@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use conversations::{Message, Role};
 use db::SearchResult;
 
@@ -5,13 +7,21 @@ use crate::inference::ModelArch;
 
 const MAX_HISTORY_TURNS: usize = 10;
 
+/// Overhead per search result: "[1] " + " (Source: " + ")\n" ≈ 20 bytes of markup.
+const MARKUP_BYTES_PER_RESULT: usize = 20;
+/// Overhead per history message: role tag + end tag ≈ 30 bytes of markup.
+const MARKUP_BYTES_PER_MESSAGE: usize = 30;
+/// Fixed overhead for system framing, special tokens, and safety margin.
+const PROMPT_FRAME_OVERHEAD: usize = 256;
+
 pub fn assemble_prompt(
     system_prompt: &str,
     results: &[SearchResult],
     history: &[Message],
     question: &str,
 ) -> String {
-    let mut prompt = String::new();
+    let estimated_size = estimate_prompt_size(system_prompt, results, history, question);
+    let mut prompt = String::with_capacity(estimated_size);
 
     // System section with retrieved context
     prompt.push_str("<|system|>\n");
@@ -20,12 +30,7 @@ pub fn assemble_prompt(
     if !results.is_empty() {
         prompt.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            prompt.push_str(&format!(
-                "[{}] {} (Source: {})\n",
-                i + 1,
-                r.text,
-                r.source_file
-            ));
+            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
         }
     }
     prompt.push_str("<|end|>\n");
@@ -66,7 +71,8 @@ pub fn assemble_prompt_gemma(
     history: &[Message],
     question: &str,
 ) -> String {
-    let mut prompt = String::new();
+    let estimated_size = estimate_prompt_size(system_prompt, results, history, question);
+    let mut prompt = String::with_capacity(estimated_size);
 
     // Conversation history (last N turns)
     let history_start = if history.len() > MAX_HISTORY_TURNS * 2 {
@@ -96,12 +102,7 @@ pub fn assemble_prompt_gemma(
     if !results.is_empty() {
         prompt.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            prompt.push_str(&format!(
-                "[{}] {} (Source: {})\n",
-                i + 1,
-                r.text,
-                r.source_file
-            ));
+            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
         }
     }
 
@@ -111,6 +112,17 @@ pub fn assemble_prompt_gemma(
     prompt.push_str("<start_of_turn>model\n");
 
     prompt
+}
+
+fn estimate_prompt_size(
+    system_prompt: &str,
+    results: &[SearchResult],
+    history: &[Message],
+    question: &str,
+) -> usize {
+    let context_size: usize = results.iter().map(|r| r.text.len() + r.source_file.len() + MARKUP_BYTES_PER_RESULT).sum();
+    let history_size: usize = history.iter().map(|m| m.content.len() + MARKUP_BYTES_PER_MESSAGE).sum();
+    system_prompt.len() + context_size + history_size + question.len() + PROMPT_FRAME_OVERHEAD
 }
 
 pub fn assemble_prompt_for_arch(

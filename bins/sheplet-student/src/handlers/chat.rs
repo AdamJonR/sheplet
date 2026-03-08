@@ -143,19 +143,35 @@ async fn chat_sync(
         )
     })?;
 
-    // Prepare prompt
+    // Embed query off the async runtime
+    let embed_pipeline = active.pipeline.clone();
+    let embed_message = req.message.clone();
+    let query_vec = tokio::task::spawn_blocking(move || {
+        embed_pipeline.blocking_read().embed_query(&embed_message)
+    })
+    .await
+    .unwrap()
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    // Search and assemble prompt
     let pipeline = active.pipeline.read().await;
-    let prepared = pipeline
-        .prepare_prompt(&req.message, &conv.messages[..conv.messages.len().saturating_sub(1)])
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let history = &conv.messages[..conv.messages.len().saturating_sub(1)];
+    let results = pipeline.search_chunks(&query_vec).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    let prepared = pipeline.assemble_from_results(&results, history, &req.message);
     drop(pipeline);
 
     match prepared {
@@ -270,8 +286,11 @@ async fn chat_stream(
         // Status: embedding
         let _ = tx.send(Ok(Event::default().event("status").data("embedding"))).await;
 
-        let pipeline_guard = pipeline.read().await;
-        let query_vec = match pipeline_guard.embed_query(&message) {
+        let embed_pipeline = pipeline.clone();
+        let embed_message = message.clone();
+        let query_vec = match tokio::task::spawn_blocking(move || {
+            embed_pipeline.blocking_read().embed_query(&embed_message)
+        }).await.unwrap() {
             Ok(v) => v,
             Err(e) => {
                 let _ = tx.send(Ok(Event::default().event("error").data(e.to_string()))).await;
@@ -283,6 +302,7 @@ async fn chat_stream(
                 return;
             }
         };
+        let pipeline_guard = pipeline.read().await;
 
         // Status: searching
         let _ = tx.send(Ok(Event::default().event("status").data("searching"))).await;

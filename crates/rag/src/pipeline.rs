@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use conversations::{Citation, Message};
 use db::VectorStore;
@@ -28,7 +28,7 @@ pub struct RagPipeline {
     store: VectorStore,
     config: RagConfig,
     model_arch: ModelArch,
-    query_cache: Mutex<LruCache<String, Vec<f32>>>,
+    query_cache: Mutex<LruCache<String, Arc<[f32]>>>,
 }
 
 impl RagPipeline {
@@ -39,6 +39,7 @@ impl RagPipeline {
         model_arch: ModelArch,
     ) -> Result<Self> {
         let embedder = EmbeddingModel::from_local(embeddings_dir)?;
+        embedder.warmup();
         let store =
             VectorStore::open_or_create(database_dir, "chunks", embeddings::EMBEDDING_DIM).await?;
         store.create_index_if_needed(256).await;
@@ -52,17 +53,17 @@ impl RagPipeline {
     }
 
     /// Embed a query string into a vector (cached for repeated queries).
-    pub fn embed_query(&self, question: &str) -> Result<Vec<f32>> {
+    pub fn embed_query(&self, question: &str) -> Result<Arc<[f32]>> {
         // Check cache first (brief lock).
         if let Some(cached) = self.query_cache.lock().unwrap().get(question) {
-            return Ok(cached.clone());
+            return Ok(Arc::clone(cached));
         }
         // Compute outside the lock.
-        let embedding = self.embedder.embed(question)?;
+        let embedding: Arc<[f32]> = self.embedder.embed(question)?.into();
         self.query_cache
             .lock()
             .unwrap()
-            .put(question.to_string(), embedding.clone());
+            .put(question.to_string(), Arc::clone(&embedding));
         Ok(embedding)
     }
 

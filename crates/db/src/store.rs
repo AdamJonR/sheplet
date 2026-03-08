@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{DbError, Result};
 use crate::query::RetrievalStrategy;
 
+/// Number of IVF partitions to probe during vector search.
+/// Higher values improve recall at the cost of latency. Default LanceDB is 1,
+/// which misses results when an IVF index is present.
+const SEARCH_NPROBES: usize = 10;
+
 /// A record to be stored in the vector database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkRecord {
@@ -107,6 +112,7 @@ impl VectorStore {
         let mut stream = table
             .vector_search(query_vector)?
             .limit(k)
+            .nprobes(SEARCH_NPROBES)
             .select(Select::columns(&["text", "source_file", "chunk_index"]))
             .execute()
             .await?;
@@ -132,6 +138,7 @@ impl VectorStore {
         let mut stream = table
             .vector_search(query_vector)?
             .limit(fetch_count)
+            .nprobes(SEARCH_NPROBES)
             .execute()
             .await?;
 

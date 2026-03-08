@@ -190,6 +190,13 @@ impl EmbeddingModel {
         Ok(result)
     }
 
+    /// Run a dummy forward pass to warm CPU caches and trigger lazy initialization.
+    ///
+    /// Call once after loading to eliminate the first-query latency spike.
+    pub fn warmup(&self) {
+        let _ = self.embed("warmup");
+    }
+
     /// Returns a reference to the underlying device.
     pub fn device(&self) -> &Device {
         &self.device
