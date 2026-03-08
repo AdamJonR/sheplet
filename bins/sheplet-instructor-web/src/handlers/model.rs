@@ -64,6 +64,7 @@ fn run_model_download(
 
     let repo_id = match name {
         "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
+        "gemma-3-1b-it" => "google/gemma-3-1b-it",
         other => other,
     };
 
@@ -152,37 +153,44 @@ fn run_model_download(
         detail: "Embedding model ready".to_string(),
     });
 
-    // Step 3: Quantize
-    let _ = tx.send(TaskEvent::StepStarted {
-        step: "Quantizing model".to_string(),
-    });
-    let gguf_path = model_dir.join("model.gguf");
-    let progress_cb = |current: usize, total: usize| {
-        let _ = tx.send(TaskEvent::Progress {
+    // Step 3: Quantize (skip for "none")
+    if quantization != "none" {
+        let _ = tx.send(TaskEvent::StepStarted {
             step: "Quantizing model".to_string(),
-            current: current as u64,
-            total: total as u64,
         });
-    };
-    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, Some(&progress_cb))?;
-    let _ = tx.send(TaskEvent::StepCompleted {
-        step: "Quantizing model".to_string(),
-        detail: format!("Quantized to {quantization}"),
-    });
+        let gguf_path = model_dir.join("model.gguf");
+        let progress_cb = |current: usize, total: usize| {
+            let _ = tx.send(TaskEvent::Progress {
+                step: "Quantizing model".to_string(),
+                current: current as u64,
+                total: total as u64,
+            });
+        };
+        rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, Some(&progress_cb))?;
+        let _ = tx.send(TaskEvent::StepCompleted {
+            step: "Quantizing model".to_string(),
+            detail: format!("Quantized to {quantization}"),
+        });
 
-    // Clean up SafeTensors files
-    for entry in std::fs::read_dir(model_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "safetensors") {
-            std::fs::remove_file(&path)?;
+        // Clean up SafeTensors files
+        for entry in std::fs::read_dir(model_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "safetensors") {
+                std::fs::remove_file(&path)?;
+            }
+            if path
+                .file_name()
+                .is_some_and(|n| n == "model.safetensors.index.json")
+            {
+                std::fs::remove_file(&path)?;
+            }
         }
-        if path
-            .file_name()
-            .is_some_and(|n| n == "model.safetensors.index.json")
-        {
-            std::fs::remove_file(&path)?;
-        }
+    } else {
+        let _ = tx.send(TaskEvent::StepCompleted {
+            step: "Quantizing model".to_string(),
+            detail: "Skipped (full precision)".to_string(),
+        });
     }
 
     // Update manifest

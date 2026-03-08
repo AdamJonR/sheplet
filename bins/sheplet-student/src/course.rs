@@ -107,10 +107,14 @@ impl CourseManager {
 
         let course_dir = &metadata.course_dir;
 
+        let model_arch = rag::detect_model_arch(course_dir.join("model"))
+            .unwrap_or(rag::ModelArch::Phi3);
+
         let pipeline = RagPipeline::new(
             course_dir.join("embeddings"),
             course_dir.join("database"),
             metadata.config.clone(),
+            model_arch,
         )
         .await?;
 
