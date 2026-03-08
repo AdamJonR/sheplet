@@ -199,6 +199,133 @@ fn gather_log_probs(
     Ok(sum)
 }
 
+/// DPO training using a full LoRA model with real tokenization and forward passes.
+/// Works with any model implementing the `LoraTrainable` trait (Phi3, Gemma3, etc.).
+///
+/// Uses `forward` for policy (with LoRA) and `forward_reference` for reference
+/// (frozen weights only) passes, then computes DPO loss from per-token log-probs.
+pub fn train_dpo_full(
+    trainer: &mut dyn crate::model_utils::LoraTrainable,
+    data: &[DpoExample],
+    config: &DpoConfig,
+) -> Result<f64, FinetuneError> {
+    if data.is_empty() {
+        return Err(FinetuneError::Training(
+            "no training data provided".to_string(),
+        ));
+    }
+
+    let device = trainer.device().clone();
+    let mut final_loss = 0.0;
+
+    for _epoch in 0..config.epochs {
+        for example in data {
+            // Tokenize prompt+chosen and prompt+rejected
+            let chosen_text = format!("{}{}", example.prompt, example.chosen);
+            let rejected_text = format!("{}{}", example.prompt, example.rejected);
+
+            let chosen_tokens = trainer
+                .encode(&chosen_text)
+                .map_err(|e| FinetuneError::Training(format!("tokenize chosen: {e}")))?;
+            let rejected_tokens = trainer
+                .encode(&rejected_text)
+                .map_err(|e| FinetuneError::Training(format!("tokenize rejected: {e}")))?;
+
+            let prompt_tokens = trainer
+                .encode(&example.prompt)
+                .map_err(|e| FinetuneError::Training(format!("tokenize prompt: {e}")))?;
+
+            let prompt_len = prompt_tokens.len();
+            let chosen_len = chosen_tokens.len().min(config.max_seq_len);
+            let rejected_len = rejected_tokens.len().min(config.max_seq_len);
+
+            if chosen_len <= prompt_len || rejected_len <= prompt_len {
+                continue;
+            }
+
+            let chosen_resp_len = chosen_len - prompt_len;
+            let rejected_resp_len = rejected_len - prompt_len;
+
+            // --- Policy forward pass (with LoRA) for chosen ---
+            trainer.clear_kv_cache();
+            let chosen_input =
+                Tensor::from_vec(chosen_tokens[..chosen_len].to_vec(), &[1, chosen_len], &device)?;
+            let policy_logits_chosen = trainer
+                .forward(&chosen_input, 0)
+                .map_err(|e| FinetuneError::Training(format!("policy forward chosen: {e}")))?;
+            let policy_logits_chosen = policy_logits_chosen.squeeze(0)?;
+
+            // --- Policy forward pass (with LoRA) for rejected ---
+            trainer.clear_kv_cache();
+            let rejected_input = Tensor::from_vec(
+                rejected_tokens[..rejected_len].to_vec(),
+                &[1, rejected_len],
+                &device,
+            )?;
+            let policy_logits_rejected = trainer
+                .forward(&rejected_input, 0)
+                .map_err(|e| FinetuneError::Training(format!("policy forward rejected: {e}")))?;
+            let policy_logits_rejected = policy_logits_rejected.squeeze(0)?;
+
+            // --- Reference forward pass (without LoRA) for chosen ---
+            trainer.clear_kv_cache();
+            let ref_logits_chosen = trainer
+                .forward_reference(&chosen_input, 0)
+                .map_err(|e| FinetuneError::Training(format!("ref forward chosen: {e}")))?;
+            let ref_logits_chosen = ref_logits_chosen.squeeze(0)?;
+
+            // --- Reference forward pass (without LoRA) for rejected ---
+            trainer.clear_kv_cache();
+            let ref_logits_rejected = trainer
+                .forward_reference(&rejected_input, 0)
+                .map_err(|e| FinetuneError::Training(format!("ref forward rejected: {e}")))?;
+            let ref_logits_rejected = ref_logits_rejected.squeeze(0)?;
+
+            // Extract response-portion logits (positions after prompt)
+            // The model outputs logits for predicting the next token at each position,
+            // so response logits start at position (prompt_len - 1).
+            let policy_resp_chosen =
+                policy_logits_chosen.narrow(0, prompt_len - 1, chosen_resp_len)?;
+            let ref_resp_chosen =
+                ref_logits_chosen.narrow(0, prompt_len - 1, chosen_resp_len)?;
+            let policy_resp_rejected =
+                policy_logits_rejected.narrow(0, prompt_len - 1, rejected_resp_len)?;
+            let ref_resp_rejected =
+                ref_logits_rejected.narrow(0, prompt_len - 1, rejected_resp_len)?;
+
+            // Target tokens for the response portion
+            let chosen_targets: Vec<u32> = chosen_tokens[prompt_len..chosen_len].to_vec();
+            let rejected_targets: Vec<u32> =
+                rejected_tokens[prompt_len..rejected_len].to_vec();
+
+            // Compute per-token log-probs and sum
+            let log_pi_chosen =
+                gather_log_probs(&policy_resp_chosen, &chosen_targets, &device)?;
+            let log_ref_chosen =
+                gather_log_probs(&ref_resp_chosen, &chosen_targets, &device)?;
+            let log_pi_rejected =
+                gather_log_probs(&policy_resp_rejected, &rejected_targets, &device)?;
+            let log_ref_rejected =
+                gather_log_probs(&ref_resp_rejected, &rejected_targets, &device)?;
+
+            // DPO loss: -log(sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))))
+            let chosen_reward = (log_pi_chosen - log_ref_chosen)?;
+            let rejected_reward = (log_pi_rejected - log_ref_rejected)?;
+            let diff = (chosen_reward - rejected_reward)?;
+            let scaled = (diff * config.beta)?;
+
+            // -log(sigmoid(x)) = log(1 + exp(-x))
+            let neg_scaled = scaled.neg()?;
+            let one = neg_scaled.ones_like()?;
+            let loss = (one + neg_scaled.exp()?)?.log()?;
+
+            final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+        }
+    }
+
+    Ok(final_loss)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

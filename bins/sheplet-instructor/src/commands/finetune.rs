@@ -59,12 +59,27 @@ pub fn run(
             .unwrap_or(false);
 
     if has_safetensors {
-        // Full model LoRA training path
+        // Full model LoRA training path — detect architecture and load trainer
+        let arch = rag::detect_model_arch(&dirs.model)
+            .context("failed to detect model architecture")?;
+
         println!("Loading model for LoRA fine-tuning...");
-        let pb = progress::spinner("Loading Phi-3 model with LoRA layers...");
-        let mut trainer =
-            finetune::Phi3LoraTrainer::new(&dirs.model, &lora_config, &device)
-                .context("failed to load model for training")?;
+        let arch_name = match arch {
+            rag::ModelArch::Phi3 => "Phi-3",
+            rag::ModelArch::Gemma3 => "Gemma 3",
+        };
+        let pb = progress::spinner(&format!("Loading {arch_name} model with LoRA layers..."));
+
+        let mut trainer: Box<dyn finetune::LoraTrainable> = match arch {
+            rag::ModelArch::Phi3 => Box::new(
+                finetune::Phi3LoraTrainer::new(&dirs.model, &lora_config, &device)
+                    .context("failed to load model for training")?,
+            ),
+            rag::ModelArch::Gemma3 => Box::new(
+                finetune::Gemma3LoraTrainer::new(&dirs.model, &lora_config, &device)
+                    .context("failed to load model for training")?,
+            ),
+        };
         pb.finish_with_message("Model loaded with LoRA layers.");
 
         match method {
@@ -84,7 +99,7 @@ pub fn run(
 
                 let pb = progress::spinner("Training SFT with full model...");
                 let final_loss = finetune::sft::train_sft_full(
-                    &mut trainer,
+                    trainer.as_mut(),
                     &examples,
                     &config,
                 )?;
@@ -94,7 +109,6 @@ pub fn run(
                 ));
 
                 trainer
-                    .model
                     .save_adapter(&adapter_path)
                     .context("failed to save adapter")?;
                 println!("Adapter saved to {}", adapter_path.display());
@@ -113,10 +127,21 @@ pub fn run(
                     config.epochs = ep;
                 }
 
-                // For DPO with full model, fall back to standalone LoRA for now
-                // (full DPO requires two forward passes per step which is memory-intensive)
-                println!("Note: Using standalone LoRA training for DPO.");
-                run_standalone_dpo(&dirs, &examples, &config, &lora_config, &adapter_path, &device)?;
+                let pb = progress::spinner("Training DPO with full model...");
+                let final_loss = finetune::dpo::train_dpo_full(
+                    trainer.as_mut(),
+                    &examples,
+                    &config,
+                )?;
+                pb.finish_with_message(format!(
+                    "DPO training complete. Final loss: {:.6}",
+                    final_loss
+                ));
+
+                trainer
+                    .save_adapter(&adapter_path)
+                    .context("failed to save adapter")?;
+                println!("Adapter saved to {}", adapter_path.display());
             }
             _ => bail!("Unknown training method: {}. Use 'sft' or 'dpo'.", method),
         }
@@ -220,54 +245,3 @@ pub fn run(
     Ok(())
 }
 
-fn run_standalone_dpo(
-    dirs: &crate::project::ProjectDirs,
-    examples: &[finetune::data::DpoExample],
-    config: &finetune::dpo::DpoConfig,
-    lora_config: &finetune::lora::LoraConfig,
-    adapter_path: &Path,
-    device: &Device,
-) -> Result<()> {
-    let in_features = 128;
-    let out_features = 128;
-    let frozen_weight =
-        candle_core::Tensor::randn(0f32, 1.0, &[out_features, in_features], device)?;
-    let frozen = Linear::new(frozen_weight, None);
-    let mut lora = finetune::lora::LoraLinear::new(
-        frozen,
-        in_features,
-        out_features,
-        lora_config,
-        device,
-    )?;
-
-    let tokenizer = SimpleTokenizer;
-    let pb = crate::progress::spinner("Training DPO...");
-    let final_loss = finetune::dpo::train_dpo(
-        &mut lora,
-        examples,
-        config,
-        &tokenizer,
-        device,
-    )?;
-    pb.finish_with_message(format!(
-        "DPO training complete. Final loss: {:.6}",
-        final_loss
-    ));
-
-    lora.save(adapter_path)?;
-    println!("Adapter saved to {}", adapter_path.display());
-
-    let checkpoint_dir = dirs.root.join("checkpoints");
-    std::fs::create_dir_all(&checkpoint_dir)?;
-    let meta = finetune::checkpoint::CheckpointMeta {
-        epoch: config.epochs,
-        step: 0,
-        loss: final_loss,
-        lora_config: lora_config.clone(),
-    };
-    finetune::checkpoint::save_checkpoint(&lora, &meta, &checkpoint_dir)?;
-    println!("Checkpoint saved to {}", checkpoint_dir.display());
-
-    Ok(())
-}

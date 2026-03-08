@@ -135,15 +135,29 @@ fn run_finetune(
             .unwrap_or(false);
 
     if has_safetensors {
-        // Full model LoRA training
+        // Full model LoRA training — detect architecture and load trainer
+        let arch = rag::detect_model_arch(&dirs.model)?;
+
         let _ = tx.send(TaskEvent::StepStarted {
             step: "Loading model".to_string(),
         });
-        let mut trainer =
-            finetune::Phi3LoraTrainer::new(&dirs.model, &lora_config, &device)?;
+
+        let arch_name = match arch {
+            rag::ModelArch::Phi3 => "Phi-3",
+            rag::ModelArch::Gemma3 => "Gemma 3",
+        };
+
+        let mut trainer: Box<dyn finetune::LoraTrainable> = match arch {
+            rag::ModelArch::Phi3 => Box::new(
+                finetune::Phi3LoraTrainer::new(&dirs.model, &lora_config, &device)?,
+            ),
+            rag::ModelArch::Gemma3 => Box::new(
+                finetune::Gemma3LoraTrainer::new(&dirs.model, &lora_config, &device)?,
+            ),
+        };
         let _ = tx.send(TaskEvent::StepCompleted {
             step: "Loading model".to_string(),
-            detail: "Model loaded with LoRA layers".to_string(),
+            detail: format!("{arch_name} model loaded with LoRA layers"),
         });
 
         match method {
@@ -168,13 +182,13 @@ fn run_finetune(
                 let _ = tx.send(TaskEvent::StepStarted {
                     step: "Training".to_string(),
                 });
-                let final_loss = finetune::sft::train_sft_full(&mut trainer, &examples, &config)?;
+                let final_loss = finetune::sft::train_sft_full(trainer.as_mut(), &examples, &config)?;
                 let _ = tx.send(TaskEvent::StepCompleted {
                     step: "Training".to_string(),
                     detail: format!("SFT complete. Final loss: {final_loss:.6}"),
                 });
 
-                trainer.model.save_adapter(&adapter_path)?;
+                trainer.save_adapter(&adapter_path)?;
             }
             "dpo" => {
                 let _ = tx.send(TaskEvent::StepStarted {
@@ -197,10 +211,13 @@ fn run_finetune(
                 let _ = tx.send(TaskEvent::StepStarted {
                     step: "Training".to_string(),
                 });
-                let _ = tx.send(TaskEvent::Log {
-                    message: "Using standalone LoRA training for DPO".to_string(),
+                let final_loss = finetune::dpo::train_dpo_full(trainer.as_mut(), &examples, &config)?;
+                let _ = tx.send(TaskEvent::StepCompleted {
+                    step: "Training".to_string(),
+                    detail: format!("DPO complete. Final loss: {final_loss:.6}"),
                 });
-                run_standalone_dpo(&dirs, &examples, &config, &lora_config, &adapter_path, &device, tx)?;
+
+                trainer.save_adapter(&adapter_path)?;
             }
             _ => anyhow::bail!("Unknown method: {method}"),
         }
@@ -304,46 +321,3 @@ fn run_finetune(
     Ok(())
 }
 
-fn run_standalone_dpo(
-    dirs: &crate::project::ProjectDirs,
-    examples: &[finetune::data::DpoExample],
-    config: &finetune::dpo::DpoConfig,
-    lora_config: &finetune::lora::LoraConfig,
-    adapter_path: &std::path::Path,
-    device: &candle_core::Device,
-    tx: &tokio::sync::broadcast::Sender<TaskEvent>,
-) -> anyhow::Result<()> {
-    let in_features = 128;
-    let out_features = 128;
-    let frozen_weight =
-        candle_core::Tensor::randn(0f32, 1.0, &[out_features, in_features], device)?;
-    let frozen = candle_nn::Linear::new(frozen_weight, None);
-    let mut lora = finetune::lora::LoraLinear::new(
-        frozen,
-        in_features,
-        out_features,
-        lora_config,
-        device,
-    )?;
-    let tokenizer = SimpleTokenizer;
-
-    let final_loss = finetune::dpo::train_dpo(&mut lora, examples, config, &tokenizer, device)?;
-    let _ = tx.send(TaskEvent::StepCompleted {
-        step: "Training".to_string(),
-        detail: format!("DPO complete. Final loss: {final_loss:.6}"),
-    });
-
-    lora.save(adapter_path)?;
-
-    let checkpoint_dir = dirs.root.join("checkpoints");
-    std::fs::create_dir_all(&checkpoint_dir)?;
-    let meta = finetune::checkpoint::CheckpointMeta {
-        epoch: config.epochs,
-        step: 0,
-        loss: final_loss,
-        lora_config: lora_config.clone(),
-    };
-    finetune::checkpoint::save_checkpoint(&lora, &meta, &checkpoint_dir)?;
-
-    Ok(())
-}

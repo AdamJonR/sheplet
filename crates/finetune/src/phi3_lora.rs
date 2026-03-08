@@ -10,6 +10,7 @@ use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, VarBuilder};
 
 use crate::lora::{LoraConfig, LoraLinear};
+use crate::model_utils::{self, linear_no_bias, repeat_kv, RotaryEmbedding};
 
 /// Phi-3 config (same structure as candle_transformers::models::phi3::Config).
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -38,47 +39,6 @@ impl Phi3Config {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Phi3Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.head_dim();
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        Ok((q_embed, k_embed))
-    }
-}
-
 /// RMS normalization (simplified, no tracing).
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -97,12 +57,6 @@ impl Module for RmsNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         candle_nn::ops::rms_norm(xs, &self.weight, self.eps as f32)
     }
-}
-
-/// Linear layer without bias (simplified, no tracing).
-fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<candle_nn::Linear> {
-    let weight = vb.get((out_dim, in_dim), "weight")?;
-    Ok(candle_nn::Linear::new(weight, None))
 }
 
 /// Attention block with LoRA on the qkv and output projections.
@@ -236,15 +190,6 @@ impl LoraAttention {
     }
 }
 
-fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        Ok(x)
-    } else {
-        let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-        Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-    }
-}
-
 struct Mlp {
     gate_up_proj: candle_nn::Linear,
     down_proj: candle_nn::Linear,
@@ -355,7 +300,13 @@ impl Phi3LoraModel {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            vb.dtype(),
+            cfg.head_dim(),
+            cfg.max_position_embeddings,
+            cfg.rope_theta,
+            vb_m.device(),
+        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -373,26 +324,6 @@ impl Phi3LoraModel {
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
-    }
-
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
-            .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
     }
 
     /// Forward pass with LoRA enabled (policy model).
@@ -415,8 +346,13 @@ impl Phi3LoraModel {
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
-            Some(mask)
+            Some(model_utils::prepare_decoder_attention_mask(
+                b_size,
+                seq_len,
+                seqlen_offset,
+                &self.device,
+                self.dtype,
+            )?)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
@@ -498,24 +434,11 @@ impl Phi3LoraTrainer {
         lora_cfg: &LoraConfig,
         device: &Device,
     ) -> anyhow::Result<Self> {
-        let tokenizer = tokenizers::Tokenizer::from_file(model_dir.join("tokenizer.json"))
-            .map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
+        let (tokenizer, st_files) = model_utils::load_model_files(model_dir)?;
 
         let config_path = model_dir.join("config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
         let config: Phi3Config = serde_json::from_str(&config_str)?;
-
-        // Find safetensors files
-        let mut st_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "safetensors"))
-            .collect();
-        st_files.sort();
-
-        if st_files.is_empty() {
-            anyhow::bail!("No safetensors files found in {}", model_dir.display());
-        }
 
         let dtype = DType::F32;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&st_files, dtype, device)? };
@@ -535,6 +458,32 @@ impl Phi3LoraTrainer {
             .encode(text, false)
             .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
         Ok(encoding.get_ids().to_vec())
+    }
+}
+
+impl model_utils::LoraTrainable for Phi3LoraTrainer {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        self.encode(text)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.model.clear_kv_cache();
+    }
+
+    fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        self.model.forward(input_ids, seqlen_offset)
+    }
+
+    fn forward_reference(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        self.model.forward_reference(input_ids, seqlen_offset)
+    }
+
+    fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.model.save_adapter(path)
     }
 }
 
