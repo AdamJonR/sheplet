@@ -8,19 +8,12 @@ use serde::Deserialize;
 
 use crate::app_state::AppState;
 use crate::project::{project_dirs, require_model};
+use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
+use crate::validation::validate_safe_name;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/finetune", post(start_finetune))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 #[derive(Deserialize)]
@@ -50,12 +43,8 @@ async fn start_finetune(
     }
 
     // Validate data_file: reject path traversal
-    if body.data_file.contains('/')
-        || body.data_file.contains('\\')
-        || body.data_file.contains("..")
-    {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid data file name"));
-    }
+    validate_safe_name(&body.data_file)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid data file name"))?;
 
     let dirs = project_dirs(&project_path);
     let data_path = dirs.finetune_data.join(&body.data_file);
@@ -67,10 +56,7 @@ async fn start_finetune(
     let method = body.method.clone();
     let learning_rate = body.learning_rate;
     let epochs = body.epochs;
-
-    let tasks2 = state.tasks.clone();
-    let tid2 = task_id.clone();
-    let mut rx = tx.subscribe();
+    let rx = tx.subscribe();
 
     tokio::task::spawn_blocking(move || {
         let result = run_finetune(&project_path, &method, &data_path, learning_rate, epochs, &tx);
@@ -79,22 +65,7 @@ async fn start_finetune(
         let _ = tx.send(TaskEvent::Done { success, error });
     });
 
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(TaskEvent::Done { success, error }) => {
-                    if success {
-                        tasks2.complete_task(&tid2).await;
-                    } else {
-                        tasks2.fail_task(&tid2, error.unwrap_or_default()).await;
-                    }
-                    break;
-                }
-                Err(_) => break,
-                _ => continue,
-            }
-        }
-    });
+    super::spawn_task_listener(state.tasks.clone(), task_id.clone(), rx);
 
     Ok(Json(serde_json::json!({ "task_id": task_id })))
 }

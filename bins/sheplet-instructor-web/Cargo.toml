@@ -15,6 +15,7 @@ db.workspace = true
 rag.workspace = true
 finetune.workspace = true
 bundle.workspace = true
+project.workspace = true
 
 candle-core.workspace = true
 candle-nn.workspace = true

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::progress;
-use crate::project::require_bundleable;
+use crate::project::{self, require_bundleable};
 
 pub fn run(project: &Path, output: &Path, bump_version: bool) -> Result<()> {
     let mut manifest = require_bundleable(project)?;
@@ -14,7 +14,7 @@ pub fn run(project: &Path, output: &Path, bump_version: bool) -> Result<()> {
     }
 
     // Update build timestamp
-    manifest.build_timestamp = Some(chrono_like_timestamp());
+    manifest.build_timestamp = Some(project::timestamp());
     manifest.save(project)?;
 
     // Load keypair
@@ -55,10 +55,3 @@ pub fn run(project: &Path, output: &Path, bump_version: bool) -> Result<()> {
     Ok(())
 }
 
-fn chrono_like_timestamp() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", now.as_secs())
-}

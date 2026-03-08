@@ -7,7 +7,7 @@ pub enum RagError {
     #[error("candle error: {0}")]
     Candle(#[from] candle_core::Error),
     #[error("tokenizer error: {0}")]
-    Tokenizer(String),
+    Tokenizer(#[from] tokenizers::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]

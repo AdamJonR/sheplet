@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::project::{self, CourseConfig, ProjectManifest};
+use crate::response::{err, ErrorResponse};
+use crate::validation::validate_safe_name;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -38,15 +40,6 @@ struct ProjectStatusInfo {
     quantization: Option<String>,
     finetune_files: Vec<String>,
     build_timestamp: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 async fn list_projects(
@@ -139,16 +132,9 @@ async fn create_project(
     Json(body): Json<CreateProject>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     // Validate directory name: reject path separators and traversal
-    if body.directory_name.contains('/')
-        || body.directory_name.contains('\\')
-        || body.directory_name.contains("..")
-        || body.directory_name.is_empty()
-    {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "Invalid directory name: must not contain path separators or '..'",
-        ));
-    }
+    validate_safe_name(&body.directory_name)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
+
     let project_path = state.base_dir.join(&body.directory_name);
     if project_path.join("manifest.json").exists() {
         return Err(err(StatusCode::CONFLICT, "Project already exists"));
@@ -205,9 +191,9 @@ async fn select_project(
     Json(body): Json<SelectProject>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     // Validate name: reject path traversal
-    if body.name.contains('/') || body.name.contains('\\') || body.name.contains("..") {
-        return Err(err(StatusCode::BAD_REQUEST, "Invalid project name"));
-    }
+    validate_safe_name(&body.name)
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid project name"))?;
+
     let project_path = state.base_dir.join(&body.name);
     if !project_path.join("manifest.json").exists() {
         return Err(err(StatusCode::NOT_FOUND, "Project not found"));

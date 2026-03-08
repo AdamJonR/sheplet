@@ -8,19 +8,11 @@ use serde::Deserialize;
 
 use crate::app_state::AppState;
 use crate::project::{project_dirs, require_init, ProjectManifest};
+use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/model/download", post(start_model_download))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 #[derive(Deserialize)]
@@ -47,10 +39,7 @@ async fn start_model_download(
     let quantization = body.quantization.unwrap_or_else(|| "q4-k-m".to_string());
 
     let (task_id, tx) = state.tasks.create_task("model_download").await;
-
-    let tasks2 = state.tasks.clone();
-    let tid2 = task_id.clone();
-    let mut rx = tx.subscribe();
+    let rx = tx.subscribe();
 
     tokio::task::spawn_blocking(move || {
         let result = run_model_download(&project_path, &name, &quantization, &tx);
@@ -59,22 +48,7 @@ async fn start_model_download(
         let _ = tx.send(TaskEvent::Done { success, error });
     });
 
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(TaskEvent::Done { success, error }) => {
-                    if success {
-                        tasks2.complete_task(&tid2).await;
-                    } else {
-                        tasks2.fail_task(&tid2, error.unwrap_or_default()).await;
-                    }
-                    break;
-                }
-                Err(_) => break,
-                _ => continue,
-            }
-        }
-    });
+    super::spawn_task_listener(state.tasks.clone(), task_id.clone(), rx);
 
     Ok(Json(serde_json::json!({ "task_id": task_id })))
 }

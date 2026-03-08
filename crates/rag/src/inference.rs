@@ -63,7 +63,7 @@ impl PhiGenerator {
 
         // Load tokenizer
         let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
-            .map_err(|e| RagError::Tokenizer(e.to_string()))?;
+            ?;
 
         // Check for GGUF file first (quantized model)
         let gguf_path = model_dir.join("model.gguf");
@@ -132,7 +132,7 @@ impl PhiGenerator {
         let encoding = self
             .tokenizer
             .encode(prompt, true)
-            .map_err(|e| RagError::Tokenizer(e.to_string()))?;
+            ?;
         let input_ids = encoding.get_ids();
         let mut tokens: Vec<u32> = input_ids.to_vec();
         let mut generated = Vec::new();
@@ -175,7 +175,7 @@ impl TextGenerator for PhiGenerator {
         let text = self
             .tokenizer
             .decode(&tokens, true)
-            .map_err(|e| RagError::Tokenizer(e.to_string()))?;
+            ?;
         Ok(text)
     }
 
@@ -199,7 +199,7 @@ impl TextGenerator for PhiGenerator {
         let encoding = self
             .tokenizer
             .encode(prompt, true)
-            .map_err(|e| RagError::Tokenizer(e.to_string()))?;
+            ?;
         let input_ids = encoding.get_ids();
         let mut tokens: Vec<u32> = input_ids.to_vec();
 
@@ -221,7 +221,7 @@ impl TextGenerator for PhiGenerator {
                 text
             }
             Err(e) => {
-                let _ = tx.send(Err(RagError::Tokenizer(e.to_string())));
+                let _ = tx.send(Err(RagError::Tokenizer(e)));
                 return Ok(());
             }
         };
@@ -252,7 +252,7 @@ impl TextGenerator for PhiGenerator {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(RagError::Tokenizer(e.to_string())));
+                    let _ = tx.send(Err(RagError::Tokenizer(e)));
                     break;
                 }
             }

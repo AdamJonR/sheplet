@@ -7,20 +7,12 @@ use axum::{Json, Router};
 
 use crate::app_state::AppState;
 use crate::project::project_dirs;
+use crate::response::{err, ErrorResponse};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/templates/generate", post(generate_templates))
         .route("/api/templates/files", get(list_files))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 const DPO_TEMPLATE: &str = r#"{"prompt": "What is photosynthesis?", "chosen": "Photosynthesis is the process by which green plants and some other organisms use sunlight to synthesize foods from carbon dioxide and water. It generally involves the green pigment chlorophyll and generates oxygen as a byproduct.", "rejected": "I think it has something to do with plants and light, maybe they eat the sun or something."}

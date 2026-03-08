@@ -22,7 +22,7 @@ pub struct SftExample {
     pub output: String,
 }
 
-pub fn load_dpo_data(path: impl AsRef<Path>) -> Result<Vec<DpoExample>, FinetuneError> {
+fn load_jsonl<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<T>, FinetuneError> {
     let file = std::fs::File::open(path.as_ref())
         .map_err(|e| FinetuneError::DataLoading(format!("failed to open file: {e}")))?;
     let reader = std::io::BufReader::new(file);
@@ -44,40 +44,19 @@ pub fn load_dpo_data(path: impl AsRef<Path>) -> Result<Vec<DpoExample>, Finetune
         if line.is_empty() {
             continue;
         }
-        let example: DpoExample = serde_json::from_str(&line)
+        let example: T = serde_json::from_str(&line)
             .map_err(|e| FinetuneError::DataLoading(format!("line {}: {e}", line_num + 1)))?;
         examples.push(example);
     }
     Ok(examples)
 }
 
+pub fn load_dpo_data(path: impl AsRef<Path>) -> Result<Vec<DpoExample>, FinetuneError> {
+    load_jsonl(path)
+}
+
 pub fn load_sft_data(path: impl AsRef<Path>) -> Result<Vec<SftExample>, FinetuneError> {
-    let file = std::fs::File::open(path.as_ref())
-        .map_err(|e| FinetuneError::DataLoading(format!("failed to open file: {e}")))?;
-    let reader = std::io::BufReader::new(file);
-    let mut examples = Vec::new();
-    for (line_num, line) in reader.lines().enumerate() {
-        if examples.len() >= MAX_EXAMPLES {
-            break;
-        }
-        let line =
-            line.map_err(|e| FinetuneError::DataLoading(format!("line {}: {e}", line_num + 1)))?;
-        if line.len() > MAX_LINE_SIZE {
-            return Err(FinetuneError::DataLoading(format!(
-                "line {}: exceeds maximum line size of {} bytes",
-                line_num + 1,
-                MAX_LINE_SIZE
-            )));
-        }
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        let example: SftExample = serde_json::from_str(&line)
-            .map_err(|e| FinetuneError::DataLoading(format!("line {}: {e}", line_num + 1)))?;
-        examples.push(example);
-    }
-    Ok(examples)
+    load_jsonl(path)
 }
 
 #[cfg(test)]

@@ -8,19 +8,11 @@ use serde::Deserialize;
 
 use crate::app_state::AppState;
 use crate::project::{project_dirs, require_init};
+use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/ingest", post(start_ingest))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 #[derive(Deserialize)]

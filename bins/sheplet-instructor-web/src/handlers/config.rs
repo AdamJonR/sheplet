@@ -8,20 +8,12 @@ use serde::Deserialize;
 
 use crate::app_state::AppState;
 use crate::project::CourseConfig;
+use crate::response::{err, ErrorResponse};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/config", get(get_config))
         .route("/api/config", put(update_config))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 async fn get_config(

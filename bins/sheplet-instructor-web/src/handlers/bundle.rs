@@ -8,19 +8,11 @@ use serde::Deserialize;
 
 use crate::app_state::AppState;
 use crate::project::{require_bundleable, ProjectManifest};
+use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/bundle", post(start_bundle))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 #[derive(Deserialize)]
@@ -56,10 +48,7 @@ async fn start_bundle(
     let bump = body.bump_version.unwrap_or(false);
 
     let (task_id, tx) = state.tasks.create_task("bundle").await;
-
-    let tasks2 = state.tasks.clone();
-    let tid2 = task_id.clone();
-    let mut rx = tx.subscribe();
+    let rx = tx.subscribe();
 
     tokio::task::spawn_blocking(move || {
         let result = run_bundle(&project_path, &output, bump, &tx);
@@ -68,22 +57,7 @@ async fn start_bundle(
         let _ = tx.send(TaskEvent::Done { success, error });
     });
 
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(TaskEvent::Done { success, error }) => {
-                    if success {
-                        tasks2.complete_task(&tid2).await;
-                    } else {
-                        tasks2.fail_task(&tid2, error.unwrap_or_default()).await;
-                    }
-                    break;
-                }
-                Err(_) => break,
-                _ => continue,
-            }
-        }
-    });
+    super::spawn_task_listener(state.tasks.clone(), task_id.clone(), rx);
 
     Ok(Json(serde_json::json!({ "task_id": task_id })))
 }
@@ -105,7 +79,7 @@ fn run_bundle(
     }
 
     // Update build timestamp
-    manifest.build_timestamp = Some(timestamp());
+    manifest.build_timestamp = Some(project::timestamp());
     manifest.save(project_path)?;
 
     // Load keypair
@@ -153,12 +127,4 @@ fn run_bundle(
     });
 
     Ok(())
-}
-
-fn timestamp() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", now.as_secs())
 }

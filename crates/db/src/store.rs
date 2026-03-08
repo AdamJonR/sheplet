@@ -140,30 +140,10 @@ impl VectorStore {
         // Collect candidates with their vectors.
         let mut candidates: Vec<(SearchResult, Vec<f32>)> = Vec::new();
         for batch in &batches {
-            let text_arr = batch
-                .column_by_name("text")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let source_arr = batch
-                .column_by_name("source_file")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let chunk_arr = batch
-                .column_by_name("chunk_index")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap();
-            let dist_arr = batch
-                .column_by_name("_distance")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap();
+            let text_arr = string_column(batch, "text");
+            let source_arr = string_column(batch, "source_file");
+            let chunk_arr = uint32_column(batch, "chunk_index");
+            let dist_arr = float_column(batch, "_distance");
             let vector_col = batch
                 .column_by_name("vector")
                 .unwrap()
@@ -376,30 +356,10 @@ impl VectorStore {
     fn batches_to_results(batches: &[RecordBatch]) -> Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         for batch in batches {
-            let text_arr = batch
-                .column_by_name("text")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let source_arr = batch
-                .column_by_name("source_file")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let chunk_arr = batch
-                .column_by_name("chunk_index")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap();
-            let dist_arr = batch
-                .column_by_name("_distance")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap();
+            let text_arr = string_column(batch, "text");
+            let source_arr = string_column(batch, "source_file");
+            let chunk_arr = uint32_column(batch, "chunk_index");
+            let dist_arr = float_column(batch, "_distance");
 
             for i in 0..batch.num_rows() {
                 results.push(SearchResult {
@@ -412,6 +372,33 @@ impl VectorStore {
         }
         Ok(results)
     }
+}
+
+fn string_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+}
+
+fn float_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a Float32Array {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .unwrap()
+}
+
+fn uint32_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a UInt32Array {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .unwrap()
 }
 
 /// Dot product of two vectors.

@@ -11,6 +11,7 @@ members = [
     "crates/db",
     "crates/bundle",
     "crates/conversations",
+    "crates/project",
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ embeddings = { path = "crates/embeddings" }
 db = { path = "crates/db" }
 bundle = { path = "crates/bundle" }
 conversations = { path = "crates/conversations" }
+project = { path = "crates/project" }
 
 # ML / inference
 candle-core = "0.8"
@@ -35,6 +37,9 @@ candle-transformers = "0.8"
 
 # Vector database
 lancedb = "0.15"
+arrow-array = "53"
+arrow-schema = "53"
+futures = "0.3"
 
 # Document parsing
 text-splitter = "0.18"
@@ -45,7 +50,6 @@ csv = "1"
 
 # Web / async
 axum = "0.8"
-leptos = "0.7"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors"] }

@@ -5313,6 +5313,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "project"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6313,6 +6322,7 @@ dependencies = [
  "indicatif",
  "parser",
  "predicates",
+ "project",
  "rag",
  "serde",
  "serde_json",
@@ -6339,6 +6349,7 @@ dependencies = [
  "hex",
  "hf-hub",
  "parser",
+ "project",
  "rag",
  "serde",
  "serde_json",
@@ -6357,13 +6368,11 @@ dependencies = [
  "axum",
  "bundle",
  "candle-core",
- "candle-transformers",
  "conversations",
  "db",
  "dirs 6.0.0",
  "embeddings",
  "hex",
- "lancedb",
  "rag",
  "serde",
  "serde_json",

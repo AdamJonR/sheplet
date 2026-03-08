@@ -16,8 +16,6 @@ bundle.workspace = true
 conversations.workspace = true
 
 candle-core.workspace = true
-candle-transformers.workspace = true
-lancedb.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

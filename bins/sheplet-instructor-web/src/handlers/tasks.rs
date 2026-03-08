@@ -10,6 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::app_state::AppState;
+use crate::response::{err, ErrorResponse};
 use crate::task_manager::{TaskEvent, TaskInfo};
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -17,15 +18,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks/{id}", get(get_task))
         .route("/api/tasks/{id}/stream", get(stream_task))
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: msg.to_string() }))
 }
 
 async fn list_tasks(
