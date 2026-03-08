@@ -16,6 +16,25 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 
+MODEL="${1:-phi}"   # "phi" or "gemma"
+
+case "$MODEL" in
+  phi)
+    MODEL_NAME="phi-4-mini-instruct"
+    QUANTIZATION="q4-k-m"
+    ;;
+  gemma)
+    MODEL_NAME="gemma-3-1b-it"
+    QUANTIZATION="none"
+    ;;
+  *)
+    echo "Usage: $0 [phi|gemma]"
+    exit 1
+    ;;
+esac
+
+echo "Model: $MODEL_NAME (quantization: $QUANTIZATION)"
+
 TOTAL_START=$SECONDS
 
 # --- Step 1: Cleanup ---------------------------------------------------------
@@ -171,7 +190,7 @@ echo "--- Ingest completed in ${TIME_INGEST}s ---"
 echo ""
 echo "=== Model ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" model --name phi-4-mini-instruct --quantization q4-k-m --project "$TEST_DIR"
+"$INSTRUCTOR" model --name "$MODEL_NAME" --quantization "$QUANTIZATION" --project "$TEST_DIR"
 TIME_MODEL=$(( SECONDS - STEP_START ))
 echo "--- Model completed in ${TIME_MODEL}s ---"
 
@@ -216,9 +235,14 @@ echo "--- DPO Train completed in ${TIME_DPO}s ---"
 TOTAL_ELAPSED=$(( SECONDS - TOTAL_START ))
 
 echo ""
-echo "=== Output Sizes ==="
+echo "=== Output Sizes ($MODEL_NAME) ==="
 if [ -f "$TEST_DIR/model/model.gguf" ]; then
     echo "  model.gguf:          $(du -h "$TEST_DIR/model/model.gguf" | cut -f1)"
+else
+    # Show SafeTensors files for full-precision models (e.g. Gemma)
+    for f in "$TEST_DIR/model/"*.safetensors; do
+        [ -f "$f" ] && echo "  $(basename "$f"): $(du -h "$f" | cut -f1)"
+    done
 fi
 if [ -f "$TEST_DIR/model/adapter.safetensors" ]; then
     echo "  adapter.safetensors: $(du -h "$TEST_DIR/model/adapter.safetensors" | cut -f1)"
