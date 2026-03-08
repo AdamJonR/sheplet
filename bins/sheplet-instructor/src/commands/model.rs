@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use crate::progress;
@@ -91,6 +91,20 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
     }
     pb.finish_with_message(format!("Model {} downloaded.", repo_id));
 
+    // Bail if no weight files were downloaded
+    let has_weights = std::fs::read_dir(model_dir)?
+        .filter_map(|e| e.ok())
+        .any(|e| e.path().extension().is_some_and(|ext| ext == "safetensors"));
+
+    if !has_weights {
+        bail!(
+            "No model weight files (.safetensors) were downloaded to {}. \
+             If this is a gated model (e.g. Gemma), set HF_TOKEN or run \
+             `huggingface-cli login` first.",
+            model_dir.display()
+        );
+    }
+
     // Also download embedding model
     let pb = progress::spinner("Downloading embedding model...");
     let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings)
@@ -105,21 +119,8 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
             .context("failed to quantize model")?;
         pb.finish_with_message(format!("Model quantized to {}.", quantization));
 
-        // Remove raw SafeTensors files after successful quantization
-        for entry in std::fs::read_dir(model_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "safetensors") {
-                std::fs::remove_file(&path)?;
-            }
-            // Also remove the index file if present
-            if path
-                .file_name()
-                .is_some_and(|n| n == "model.safetensors.index.json")
-            {
-                std::fs::remove_file(&path)?;
-            }
-        }
+        // Keep SafeTensors files alongside GGUF — they are needed for LoRA fine-tuning.
+        // GGUF is used for quantized inference; SafeTensors are used for training.
 
         println!("Model setup complete.");
         println!("  Model: {}", name);

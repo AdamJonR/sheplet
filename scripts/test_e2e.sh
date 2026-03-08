@@ -26,6 +26,10 @@ case "$MODEL" in
   gemma)
     MODEL_NAME="gemma-3-1b-it"
     QUANTIZATION="none"
+    if [ -z "${HF_TOKEN:-}" ]; then
+        echo "Warning: HF_TOKEN not set. Gemma is a gated model — download may fail."
+        echo "  Set HF_TOKEN or run: huggingface-cli login"
+    fi
     ;;
   *)
     echo "Usage: $0 [phi|gemma]"
@@ -238,12 +242,11 @@ echo ""
 echo "=== Output Sizes ($MODEL_NAME) ==="
 if [ -f "$TEST_DIR/model/model.gguf" ]; then
     echo "  model.gguf:          $(du -h "$TEST_DIR/model/model.gguf" | cut -f1)"
-else
-    # Show SafeTensors files for full-precision models (e.g. Gemma)
-    for f in "$TEST_DIR/model/"*.safetensors; do
-        [ -f "$f" ] && echo "  $(basename "$f"): $(du -h "$f" | cut -f1)"
-    done
 fi
+# Show SafeTensors files (present for both quantized and full-precision models)
+for f in "$TEST_DIR/model/"*.safetensors; do
+    [ -f "$f" ] && echo "  $(basename "$f"): $(du -h "$f" | cut -f1)"
+done
 if [ -f "$TEST_DIR/model/adapter.safetensors" ]; then
     echo "  adapter.safetensors: $(du -h "$TEST_DIR/model/adapter.safetensors" | cut -f1)"
 fi
