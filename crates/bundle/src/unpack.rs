@@ -1,24 +1,34 @@
-use std::io::{Cursor, Read};
+use std::io::{BufReader, Cursor, Read};
 use std::path::Path;
 
 use crate::error::BundleError;
 use crate::keys::Keypair;
 use crate::manifest::Manifest;
 
+/// Create a streaming tar archive over zstd-compressed data.
+///
+/// Each call produces a fresh decompression stream, allowing multiple
+/// sequential passes without materializing the full decompressed content.
+fn streaming_archive(
+    compressed_data: &[u8],
+) -> Result<tar::Archive<zstd::stream::Decoder<'_, BufReader<Cursor<&[u8]>>>>, BundleError> {
+    let decoder = zstd::stream::Decoder::new(Cursor::new(compressed_data))?;
+    Ok(tar::Archive::new(decoder))
+}
+
 /// Verify the signature and extract a `.sheplet` bundle.
 ///
 /// The bundle's public key fingerprint must match `trusted_fingerprint` exactly —
 /// this prevents an attacker from self-signing a bundle with their own keypair.
 ///
-/// Steps:
-/// 1. Read the bundle file.
-/// 2. Split into compressed data (all but last 64 bytes) and signature (last 64 bytes).
-/// 3. Decompress to get tar bytes and extract `manifest.json` to read the public key.
-/// 4. Verify the public key fingerprint against the trusted value.
-/// 5. Verify the signature over the compressed data using the public key from the manifest.
-/// 6. Validate tar entry paths to prevent path traversal.
-/// 7. Extract all tar entries to `output_dir`.
-/// 8. Return the parsed [`Manifest`].
+/// Uses two streaming decompression passes over the compressed data so that
+/// the full decompressed tar is never held in memory:
+///
+/// 1. **Pass 1 — Extract manifest**: Stream-decompress, find `manifest.json`, verify
+///    fingerprint and signature.
+/// 2. **Pass 2 — Extract files**: Stream-decompress directly to disk via `tar::Archive::unpack()`,
+///    which internally validates paths (strips leading `/`, rejects `..` components,
+///    and verifies entries stay within the output directory).
 pub fn verify_and_unpack(
     bundle_path: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
@@ -35,25 +45,9 @@ pub fn verify_and_unpack(
 
     let (compressed_data, signature) = bytes.split_at(bytes.len() - 64);
 
-    // Decompress with size limit (4 GB)
-    const MAX_DECOMPRESSED_SIZE: usize = 4 * 1024 * 1024 * 1024;
-    let tar_bytes = {
-        let decoder = zstd::stream::Decoder::new(Cursor::new(compressed_data))?;
-        let mut buf = Vec::new();
-        let n = decoder
-            .take(MAX_DECOMPRESSED_SIZE as u64 + 1)
-            .read_to_end(&mut buf)?;
-        if n > MAX_DECOMPRESSED_SIZE {
-            return Err(BundleError::InvalidManifest(
-                "decompressed bundle exceeds 4 GB size limit".to_string(),
-            ));
-        }
-        buf
-    };
-
-    // Extract manifest.json from the tar to read the public key
+    // Pass 1: Stream-decompress to extract manifest.json only
     let manifest = {
-        let mut archive = tar::Archive::new(Cursor::new(&tar_bytes));
+        let mut archive = streaming_archive(compressed_data)?;
         let mut manifest_data: Option<Vec<u8>> = None;
 
         for entry in archive.entries()? {
@@ -86,42 +80,9 @@ pub fn verify_and_unpack(
         .map_err(|e| BundleError::InvalidManifest(format!("invalid public key hex: {e}")))?;
     Keypair::verify(&public_key_bytes, compressed_data, signature)?;
 
-    // Validate tar entry paths before extraction (prevent path traversal)
+    // Pass 2: Stream-decompress directly to disk
     std::fs::create_dir_all(output_dir)?;
-    let canonical_output = output_dir.canonicalize()?;
-    {
-        let mut archive = tar::Archive::new(Cursor::new(&tar_bytes));
-        for entry in archive.entries()? {
-            let entry = entry?;
-            let entry_path = entry.path()?;
-            // Reject absolute paths and paths with ".." components
-            if entry_path.is_absolute() {
-                return Err(BundleError::InvalidManifest(format!(
-                    "tar entry has absolute path: {}",
-                    entry_path.display()
-                )));
-            }
-            for component in entry_path.components() {
-                if matches!(component, std::path::Component::ParentDir) {
-                    return Err(BundleError::InvalidManifest(format!(
-                        "tar entry contains path traversal: {}",
-                        entry_path.display()
-                    )));
-                }
-            }
-            // Verify resolved path stays within output_dir
-            let resolved = canonical_output.join(&entry_path);
-            if !resolved.starts_with(&canonical_output) {
-                return Err(BundleError::InvalidManifest(format!(
-                    "tar entry escapes output directory: {}",
-                    entry_path.display()
-                )));
-            }
-        }
-    }
-
-    // Extract all entries to output_dir
-    let mut archive = tar::Archive::new(Cursor::new(&tar_bytes));
+    let mut archive = streaming_archive(compressed_data)?;
     archive.unpack(output_dir)?;
 
     Ok(manifest)
