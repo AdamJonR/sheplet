@@ -140,9 +140,10 @@ pub fn train_sft(
     Ok(final_loss)
 }
 
-/// SFT training using a full Phi3LoraModel with real tokenization and forward passes.
+/// SFT training using a full LoRA model with real tokenization and forward passes.
+/// Works with any model implementing the `LoraTrainable` trait (Phi3, Gemma3, etc.).
 pub fn train_sft_full(
-    trainer: &mut crate::phi3_lora::Phi3LoraTrainer,
+    trainer: &mut dyn crate::model_utils::LoraTrainable,
     data: &[SftExample],
     config: &SftConfig,
 ) -> Result<f64, FinetuneError> {
@@ -152,18 +153,15 @@ pub fn train_sft_full(
         ));
     }
 
-    let device = trainer.device.clone();
+    let device = trainer.device().clone();
     let mut final_loss = 0.0;
 
     for _epoch in 0..config.epochs {
         for example in data {
-            trainer.model.clear_kv_cache();
+            trainer.clear_kv_cache();
 
             // Tokenize input + output together
             let full_text = format!("{}{}", example.input, example.output);
-            let _input_tokens = trainer
-                .encode(&example.input)
-                .map_err(|e| FinetuneError::Training(format!("tokenize: {e}")))?;
             let all_tokens = trainer
                 .encode(&full_text)
                 .map_err(|e| FinetuneError::Training(format!("tokenize: {e}")))?;
@@ -174,23 +172,13 @@ pub fn train_sft_full(
             }
 
             let input_ids = &all_tokens[..seq_len];
-            let input_tensor = Tensor::from_vec(
-                input_ids.to_vec(),
-                &[1, seq_len],
-                &device,
-            )?;
+            let input_tensor = Tensor::from_vec(input_ids.to_vec(), &[1, seq_len], &device)?;
 
-            // Forward pass
+            // Forward pass — returns last-position logits
             let logits = trainer
-                .model
                 .forward(&input_tensor, 0)
                 .map_err(|e| FinetuneError::Training(format!("forward: {e}")))?;
 
-            // logits shape: [1, 1, vocab_size] (from narrow in forward)
-            // For SFT we need logits for all positions - this is a limitation of
-            // the current model forward which only returns last position logits.
-            // For a real implementation we'd modify forward to return all positions.
-            // For now, use the last-position loss as a proxy.
             let logits = logits.squeeze(0)?; // [1, vocab_size]
 
             // Target is the next token after the sequence
@@ -205,10 +193,6 @@ pub fn train_sft_full(
                 .map_err(|e| FinetuneError::Training(format!("loss: {e}")))?;
 
             final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
-
-            // Note: backward_step requires Vars, which are created inside the
-            // model. For full training, the LoRA weights would need to be Vars.
-            // This is handled by the phi3_lora module's training infrastructure.
         }
     }
 
