@@ -1,1 +1,5 @@
 /target
+.DS_Store
+*.sheplet
+test-project/
+test-student-data/
