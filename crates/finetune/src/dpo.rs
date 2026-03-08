@@ -243,17 +243,18 @@ pub fn train_dpo_full(
                 continue;
             }
 
-            let chosen_resp_len = chosen_len - prompt_len;
-            let rejected_resp_len = rejected_len - prompt_len;
+            // forward_from returns logits only from prompt_len-1 onwards,
+            // so the output already contains just the response-portion logits.
+            let resp_start = prompt_len - 1;
 
             // --- Policy forward pass (with LoRA) for chosen ---
             trainer.clear_kv_cache();
             let chosen_input =
                 Tensor::from_vec(chosen_tokens[..chosen_len].to_vec(), &[1, chosen_len], &device)?;
-            let policy_logits_chosen = trainer
-                .forward(&chosen_input, 0)
-                .map_err(|e| FinetuneError::Training(format!("policy forward chosen: {e}")))?;
-            let policy_logits_chosen = policy_logits_chosen.squeeze(0)?;
+            let policy_resp_chosen = trainer
+                .forward_from(&chosen_input, 0, resp_start)
+                .map_err(|e| FinetuneError::Training(format!("policy forward chosen: {e}")))?
+                .squeeze(0)?;
 
             // --- Policy forward pass (with LoRA) for rejected ---
             trainer.clear_kv_cache();
@@ -262,36 +263,24 @@ pub fn train_dpo_full(
                 &[1, rejected_len],
                 &device,
             )?;
-            let policy_logits_rejected = trainer
-                .forward(&rejected_input, 0)
-                .map_err(|e| FinetuneError::Training(format!("policy forward rejected: {e}")))?;
-            let policy_logits_rejected = policy_logits_rejected.squeeze(0)?;
+            let policy_resp_rejected = trainer
+                .forward_from(&rejected_input, 0, resp_start)
+                .map_err(|e| FinetuneError::Training(format!("policy forward rejected: {e}")))?
+                .squeeze(0)?;
 
             // --- Reference forward pass (without LoRA) for chosen ---
             trainer.clear_kv_cache();
-            let ref_logits_chosen = trainer
-                .forward_reference(&chosen_input, 0)
-                .map_err(|e| FinetuneError::Training(format!("ref forward chosen: {e}")))?;
-            let ref_logits_chosen = ref_logits_chosen.squeeze(0)?;
+            let ref_resp_chosen = trainer
+                .forward_reference_from(&chosen_input, 0, resp_start)
+                .map_err(|e| FinetuneError::Training(format!("ref forward chosen: {e}")))?
+                .squeeze(0)?;
 
             // --- Reference forward pass (without LoRA) for rejected ---
             trainer.clear_kv_cache();
-            let ref_logits_rejected = trainer
-                .forward_reference(&rejected_input, 0)
-                .map_err(|e| FinetuneError::Training(format!("ref forward rejected: {e}")))?;
-            let ref_logits_rejected = ref_logits_rejected.squeeze(0)?;
-
-            // Extract response-portion logits (positions after prompt)
-            // The model outputs logits for predicting the next token at each position,
-            // so response logits start at position (prompt_len - 1).
-            let policy_resp_chosen =
-                policy_logits_chosen.narrow(0, prompt_len - 1, chosen_resp_len)?;
-            let ref_resp_chosen =
-                ref_logits_chosen.narrow(0, prompt_len - 1, chosen_resp_len)?;
-            let policy_resp_rejected =
-                policy_logits_rejected.narrow(0, prompt_len - 1, rejected_resp_len)?;
-            let ref_resp_rejected =
-                ref_logits_rejected.narrow(0, prompt_len - 1, rejected_resp_len)?;
+            let ref_resp_rejected = trainer
+                .forward_reference_from(&rejected_input, 0, resp_start)
+                .map_err(|e| FinetuneError::Training(format!("ref forward rejected: {e}")))?
+                .squeeze(0)?;
 
             // Target tokens for the response portion
             let chosen_targets: Vec<u32> = chosen_tokens[prompt_len..chosen_len].to_vec();

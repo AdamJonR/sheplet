@@ -333,20 +333,32 @@ impl Phi3LoraModel {
         })
     }
 
-    /// Forward pass with LoRA enabled (policy model).
+    /// Forward pass with LoRA enabled (policy model) — last position only.
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        self.forward_inner(input_ids, seqlen_offset, true)
+        self.forward_inner(input_ids, seqlen_offset, None, true)
     }
 
-    /// Forward pass with LoRA disabled (reference model for DPO).
+    /// Forward pass with LoRA disabled (reference model for DPO) — last position only.
     pub fn forward_reference(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        self.forward_inner(input_ids, seqlen_offset, false)
+        self.forward_inner(input_ids, seqlen_offset, None, false)
     }
 
+    /// Forward pass with LoRA enabled, returning logits from `start_pos` onwards.
+    pub fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
+        self.forward_inner(input_ids, seqlen_offset, Some(start_pos), true)
+    }
+
+    /// Forward pass with LoRA disabled, returning logits from `start_pos` onwards.
+    pub fn forward_reference_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
+        self.forward_inner(input_ids, seqlen_offset, Some(start_pos), false)
+    }
+
+    /// `logits_from_pos`: `None` = last position only, `Some(pos)` = from position `pos` onwards.
     fn forward_inner(
         &mut self,
         input_ids: &Tensor,
         seqlen_offset: usize,
+        logits_from_pos: Option<usize>,
         use_lora: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
@@ -365,9 +377,14 @@ impl Phi3LoraModel {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset, use_lora)?;
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        match logits_from_pos {
+            Some(pos) => xs.narrow(1, pos, seq_len - pos)?
+                .apply(&self.norm)?
+                .apply(&self.lm_head),
+            None => xs.narrow(1, seq_len - 1, 1)?
+                .apply(&self.norm)?
+                .apply(&self.lm_head),
+        }
     }
 
     pub fn clear_kv_cache(&mut self) {
@@ -487,6 +504,14 @@ impl model_utils::LoraTrainable for Phi3LoraTrainer {
 
     fn forward_reference(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         self.model.forward_reference(input_ids, seqlen_offset)
+    }
+
+    fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
+        self.model.forward_from(input_ids, seqlen_offset, start_pos)
+    }
+
+    fn forward_reference_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
+        self.model.forward_reference_from(input_ids, seqlen_offset, start_pos)
     }
 
     fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {

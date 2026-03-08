@@ -118,5 +118,9 @@ pub trait LoraTrainable {
     fn clear_kv_cache(&mut self);
     fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>;
     fn forward_reference(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>;
+    /// Forward pass returning logits from `start_pos` onwards: [batch, len-start_pos, vocab_size].
+    /// Used by DPO training which needs per-token log-probs for the response portion.
+    fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor>;
+    fn forward_reference_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor>;
     fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()>;
 }
