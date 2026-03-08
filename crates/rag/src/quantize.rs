@@ -54,10 +54,12 @@ fn quant_dtype_for_tensor(ggml_name: &str, scheme: &str) -> GgmlDType {
     }
 
     match scheme {
-        "q4-k-m" => {
-            // Q6K for attn_output and ffn_down (sensitive layers), Q4K for the rest
+        "q4-k-m" | "q5-k-m" => {
+            // K-M mixed: Q6K for sensitive layers (attn_output, ffn_down), base dtype for the rest
             if ggml_name.contains("attn_output") || ggml_name.contains("ffn_down") {
                 GgmlDType::Q6K
+            } else if scheme == "q5-k-m" {
+                GgmlDType::Q5K
             } else {
                 GgmlDType::Q4K
             }
@@ -393,6 +395,32 @@ mod tests {
             GgmlDType::Q4K
         );
 
+        // q5-k-m: norms/embeds -> F32, attn_output/ffn_down -> Q6K, rest -> Q5K
+        assert_eq!(
+            quant_dtype_for_tensor("token_embd.weight", "q5-k-m"),
+            GgmlDType::F32
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("output_norm.weight", "q5-k-m"),
+            GgmlDType::F32
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.attn_output.weight", "q5-k-m"),
+            GgmlDType::Q6K
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.ffn_down.weight", "q5-k-m"),
+            GgmlDType::Q6K
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.attn_qkv.weight", "q5-k-m"),
+            GgmlDType::Q5K
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.ffn_up.weight", "q5-k-m"),
+            GgmlDType::Q5K
+        );
+
         // q8-0
         assert_eq!(
             quant_dtype_for_tensor("blk.0.attn_qkv.weight", "q8-0"),
@@ -421,6 +449,13 @@ mod tests {
         // Verify we can dequantize back
         let recovered = qtensor.dequantize(&device).unwrap();
         assert_eq!(recovered.shape().dims(), &[64, 64]);
+
+        // Q5K round-trip (Q5K block size is 256, so last dim must be divisible by 256)
+        let tensor_q5k = Tensor::rand(0.0f32, 1.0f32, &[64, 256], &device).unwrap();
+        let qtensor_q5k = QTensor::quantize(&tensor_q5k, GgmlDType::Q5K).unwrap();
+        assert_eq!(qtensor_q5k.shape().dims(), &[64, 256]);
+        let recovered_q5k = qtensor_q5k.dequantize(&device).unwrap();
+        assert_eq!(recovered_q5k.shape().dims(), &[64, 256]);
     }
 
     #[test]
@@ -432,6 +467,48 @@ mod tests {
         // Full rotary: partial_rotary_factor=1.0, head_dim=96 -> rope_dim=96
         let rope_dim = (96_f32 * 1.0) as u32;
         assert_eq!(rope_dim, 96);
+    }
+
+    #[test]
+    fn test_q5km_mixed_gguf_round_trip() {
+        use candle_core::quantized::gguf_file;
+        let device = Device::Cpu;
+
+        // Simulate q5-k-m mixed quantization: Q5K (bulk), Q6K (sensitive), F32 (norms)
+        let bulk = Tensor::rand(0.0f32, 1.0f32, &[256, 256], &device).unwrap();
+        let qt_q5k = QTensor::quantize(&bulk, GgmlDType::Q5K).unwrap();
+
+        let sensitive = Tensor::rand(0.0f32, 1.0f32, &[256, 256], &device).unwrap();
+        let qt_q6k = QTensor::quantize(&sensitive, GgmlDType::Q6K).unwrap();
+
+        let norm = Tensor::rand(0.0f32, 1.0f32, &[256], &device).unwrap();
+        let qt_f32 = QTensor::quantize(&norm, GgmlDType::F32).unwrap();
+
+        let val = gguf_file::Value::U32(1);
+        let metadata = vec![("test.version", &val)];
+        let tensors = vec![
+            ("blk.0.attn_qkv.weight", &qt_q5k),
+            ("blk.0.attn_output.weight", &qt_q6k),
+            ("output_norm.weight", &qt_f32),
+        ];
+
+        // Write
+        let mut buf = std::io::Cursor::new(Vec::new());
+        gguf_file::write(&mut buf, &metadata, &tensors).unwrap();
+
+        // Read back and verify dtypes
+        buf.set_position(0);
+        let content = gguf_file::Content::read(&mut buf).unwrap();
+        assert_eq!(content.tensor_infos.len(), 3);
+
+        let qkv_info = &content.tensor_infos["blk.0.attn_qkv.weight"];
+        assert_eq!(qkv_info.ggml_dtype, GgmlDType::Q5K);
+
+        let attn_out_info = &content.tensor_infos["blk.0.attn_output.weight"];
+        assert_eq!(attn_out_info.ggml_dtype, GgmlDType::Q6K);
+
+        let norm_info = &content.tensor_infos["output_norm.weight"];
+        assert_eq!(norm_info.ggml_dtype, GgmlDType::F32);
     }
 
     #[test]
