@@ -8,7 +8,7 @@ pub use error::BundleError;
 pub use keys::Keypair;
 pub use manifest::Manifest;
 pub use pack::pack;
-pub use unpack::{verify_and_unpack, verify_and_unpack_trusted};
+pub use unpack::verify_and_unpack;
 
 #[cfg(test)]
 mod tests {
@@ -98,7 +98,7 @@ mod tests {
         assert!(bundle_path.exists());
 
         let extract_dir = tmp.path().join("extracted");
-        let manifest = verify_and_unpack(&bundle_path, &extract_dir).unwrap();
+        let manifest = verify_and_unpack(&bundle_path, &extract_dir, &kp.fingerprint()).unwrap();
 
         assert_eq!(manifest.course_name, "Test Course");
         assert_eq!(manifest.model_name, "phi-4-mini");
@@ -136,7 +136,7 @@ mod tests {
         fs::write(&bundle_path, &bytes).unwrap();
 
         let extract_dir = tmp.path().join("extracted");
-        let result = verify_and_unpack(&bundle_path, &extract_dir);
+        let result = verify_and_unpack(&bundle_path, &extract_dir, &kp.fingerprint());
         assert!(result.is_err());
     }
 

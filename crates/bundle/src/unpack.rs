@@ -7,16 +7,14 @@ use crate::manifest::Manifest;
 
 /// Verify the signature and extract a `.sheplet` bundle.
 ///
-/// If `trusted_fingerprint` is `Some`, the bundle's public key fingerprint
-/// must match exactly — this prevents an attacker from self-signing a bundle
-/// with their own keypair. If `None`, the public key from the manifest is
-/// trusted (backwards-compatible but insecure).
+/// The bundle's public key fingerprint must match `trusted_fingerprint` exactly —
+/// this prevents an attacker from self-signing a bundle with their own keypair.
 ///
 /// Steps:
 /// 1. Read the bundle file.
 /// 2. Split into compressed data (all but last 64 bytes) and signature (last 64 bytes).
 /// 3. Decompress to get tar bytes and extract `manifest.json` to read the public key.
-/// 4. Optionally verify the public key fingerprint against a trusted value.
+/// 4. Verify the public key fingerprint against the trusted value.
 /// 5. Verify the signature over the compressed data using the public key from the manifest.
 /// 6. Validate tar entry paths to prevent path traversal.
 /// 7. Extract all tar entries to `output_dir`.
@@ -24,24 +22,7 @@ use crate::manifest::Manifest;
 pub fn verify_and_unpack(
     bundle_path: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
-) -> Result<Manifest, BundleError> {
-    verify_and_unpack_with_trust(bundle_path, output_dir, None)
-}
-
-/// Like [`verify_and_unpack`] but requires the bundle's public key fingerprint
-/// to match `trusted_fingerprint`.
-pub fn verify_and_unpack_trusted(
-    bundle_path: impl AsRef<Path>,
-    output_dir: impl AsRef<Path>,
     trusted_fingerprint: &str,
-) -> Result<Manifest, BundleError> {
-    verify_and_unpack_with_trust(bundle_path, output_dir, Some(trusted_fingerprint))
-}
-
-fn verify_and_unpack_with_trust(
-    bundle_path: impl AsRef<Path>,
-    output_dir: impl AsRef<Path>,
-    trusted_fingerprint: Option<&str>,
 ) -> Result<Manifest, BundleError> {
     let bundle_path = bundle_path.as_ref();
     let output_dir = output_dir.as_ref();
@@ -93,13 +74,11 @@ fn verify_and_unpack_with_trust(
     };
 
     // Verify the public key fingerprint against trusted value
-    if let Some(expected) = trusted_fingerprint {
-        if manifest.public_key_fingerprint != expected {
-            return Err(BundleError::UntrustedKey {
-                expected: expected.to_string(),
-                actual: manifest.public_key_fingerprint.clone(),
-            });
-        }
+    if manifest.public_key_fingerprint != trusted_fingerprint {
+        return Err(BundleError::UntrustedKey {
+            expected: trusted_fingerprint.to_string(),
+            actual: manifest.public_key_fingerprint.clone(),
+        });
     }
 
     // Verify signature

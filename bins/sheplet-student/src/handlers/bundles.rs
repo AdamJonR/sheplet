@@ -11,7 +11,7 @@ use crate::app_state::AppState;
 #[derive(Deserialize)]
 pub struct LoadBundleRequest {
     path: String,
-    trusted_fingerprint: Option<String>,
+    trusted_fingerprint: String,
 }
 
 #[derive(Serialize)]
@@ -33,9 +33,24 @@ async fn load_bundle(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoadBundleRequest>,
 ) -> Result<Json<LoadBundleResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Validate fingerprint format: must be exactly 16 hex characters
+    if req.trusted_fingerprint.len() != 16
+        || !req
+            .trusted_fingerprint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid fingerprint: must be exactly 16 hex characters".to_string(),
+            }),
+        ));
+    }
+
     let mut courses = state.courses.write().await;
     match courses
-        .load_bundle(&req.path, &state.base_dir, req.trusted_fingerprint.as_deref())
+        .load_bundle(&req.path, &state.base_dir, &req.trusted_fingerprint)
         .await
     {
         Ok(course_id) => Ok(Json(LoadBundleResponse {

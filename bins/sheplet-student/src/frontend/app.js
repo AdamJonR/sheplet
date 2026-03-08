@@ -20,6 +20,7 @@ const bundleModal = document.getElementById('bundle-modal');
 const closeBundleModal = document.getElementById('close-bundle-modal');
 const submitBundlePath = document.getElementById('submit-bundle-path');
 const bundlePathInput = document.getElementById('bundle-path-input');
+const bundleFingerprintInput = document.getElementById('bundle-fingerprint-input');
 
 // API helpers
 async function api(method, path, body) {
@@ -96,6 +97,7 @@ async function switchCourse(courseId) {
 loadBundleBtn.addEventListener('click', () => {
     bundleModal.style.display = 'flex';
     bundlePathInput.value = '';
+    bundleFingerprintInput.value = '';
     bundlePathInput.focus();
 });
 
@@ -106,10 +108,16 @@ closeBundleModal.addEventListener('click', () => {
 submitBundlePath.addEventListener('click', async () => {
     const path = bundlePathInput.value.trim();
     if (!path) return;
+    const fingerprint = bundleFingerprintInput.value.trim();
+    if (!fingerprint) {
+        alert('Instructor fingerprint is required');
+        bundleFingerprintInput.focus();
+        return;
+    }
     bundleModal.style.display = 'none';
     courseInfo.innerHTML = '<span class="spinner"></span> Loading bundle...';
     try {
-        await api('POST', '/api/bundles/load', { path });
+        await api('POST', '/api/bundles/load', { path, trusted_fingerprint: fingerprint });
         await refreshCourses();
         await refreshConversations();
     } catch (e) {

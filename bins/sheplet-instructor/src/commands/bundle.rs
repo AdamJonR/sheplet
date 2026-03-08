@@ -50,6 +50,8 @@ pub fn run(project: &Path, output: &Path, bump_version: bool) -> Result<()> {
     println!("Bundle created: {}", output.display());
     println!("  Course: {}", manifest.course_name);
     println!("  Version: {}", manifest.version);
+    println!();
+    println!("  Students must enter this fingerprint when loading the bundle:");
     println!("  Fingerprint: {}", fingerprint);
 
     Ok(())

@@ -94,6 +94,13 @@
                     <label for="bundle-path-input">Bundle file path (.sheplet)</label>
                     <input type="text" id="bundle-path-input" placeholder="/path/to/course.sheplet">
                 </div>
+                <div class="form-group">
+                    <label for="bundle-fingerprint-input">Instructor fingerprint</label>
+                    <input type="text" id="bundle-fingerprint-input"
+                           placeholder="16-character hex (from instructor)"
+                           maxlength="16" pattern="[0-9a-fA-F]{16}">
+                    <small>Get this from your instructor — shown during project creation and bundling.</small>
+                </div>
                 <button id="submit-bundle-path" class="btn btn-primary">Load</button>
             </div>
         </div>

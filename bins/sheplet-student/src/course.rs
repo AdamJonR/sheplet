@@ -50,7 +50,7 @@ impl CourseManager {
         &mut self,
         bundle_path: impl AsRef<Path>,
         base_dir: impl AsRef<Path>,
-        trusted_fingerprint: Option<&str>,
+        trusted_fingerprint: &str,
     ) -> Result<String> {
         let bundle_path = bundle_path.as_ref();
         let base_dir = base_dir.as_ref();
@@ -65,17 +65,8 @@ impl CourseManager {
         let course_dir = base_dir.join("courses").join(&course_id);
         std::fs::create_dir_all(&course_dir)?;
 
-        let manifest = if let Some(fp) = trusted_fingerprint {
-            bundle::verify_and_unpack_trusted(bundle_path, &course_dir, fp)
-                .context("Failed to verify and unpack bundle")?
-        } else {
-            eprintln!(
-                "WARNING: Loading bundle without trusted fingerprint verification. \
-                 Pass --trusted-fingerprint to verify the instructor's identity."
-            );
-            bundle::verify_and_unpack(bundle_path, &course_dir)
-                .context("Failed to verify and unpack bundle")?
-        };
+        let manifest = bundle::verify_and_unpack(bundle_path, &course_dir, trusted_fingerprint)
+            .context("Failed to verify and unpack bundle")?;
 
         // Read config.json from extracted bundle
         let config_path = course_dir.join("config.json");
