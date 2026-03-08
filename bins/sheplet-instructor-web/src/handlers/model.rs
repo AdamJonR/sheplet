@@ -183,7 +183,14 @@ fn run_model_download(
         step: "Quantizing model".to_string(),
     });
     let gguf_path = model_dir.join("model.gguf");
-    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization)?;
+    let progress_cb = |current: usize, total: usize| {
+        let _ = tx.send(TaskEvent::Progress {
+            step: "Quantizing model".to_string(),
+            current: current as u64,
+            total: total as u64,
+        });
+    };
+    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, Some(&progress_cb))?;
     let _ = tx.send(TaskEvent::StepCompleted {
         step: "Quantizing model".to_string(),
         detail: format!("Quantized to {quantization}"),

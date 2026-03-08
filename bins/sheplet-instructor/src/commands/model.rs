@@ -99,7 +99,7 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
     // Quantize the model
     let gguf_path = model_dir.join("model.gguf");
     let pb = progress::spinner(&format!("Quantizing model to {}...", quantization));
-    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization)
+    rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, None)
         .context("failed to quantize model")?;
     pb.finish_with_message(format!("Model quantized to {}.", quantization));
 

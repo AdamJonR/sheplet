@@ -148,10 +148,14 @@ struct PhiParams {
 /// Loads F32 tensors from SafeTensors (one at a time to minimize memory),
 /// quantizes them according to the specified scheme, and writes a GGUF file
 /// with the required Phi-3 metadata.
+///
+/// An optional progress callback receives `(current_tensor_index, total_tensor_count)`
+/// after each tensor is quantized.
 pub fn quantize_safetensors_to_gguf(
     model_dir: &Path,
     output_path: &Path,
     quantization: &str,
+    progress_fn: Option<&dyn Fn(usize, usize)>,
 ) -> Result<()> {
     let device = Device::Cpu;
 
@@ -197,30 +201,45 @@ pub fn quantize_safetensors_to_gguf(
         }
     }
 
-    // Quantize tensors one at a time to minimize peak memory
-    let mut quantized_tensors: Vec<(String, QTensor)> = Vec::new();
+    let total_tensors = tensor_sources.len();
 
+    // Group tensors by source file to avoid redundant I/O.
+    // Each file is read once, and all tensors from it are quantized before moving on.
+    let mut grouped: std::collections::BTreeMap<std::path::PathBuf, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
     for (hf_name, ggml_name, st_file) in &tensor_sources {
+        grouped
+            .entry(st_file.clone())
+            .or_default()
+            .push((hf_name.clone(), ggml_name.clone()));
+    }
+
+    let mut quantized_tensors: Vec<(String, QTensor)> = Vec::with_capacity(total_tensors);
+    let mut completed = 0usize;
+
+    for (st_file, tensors_in_file) in &grouped {
         let data = std::fs::read(st_file)?;
         let st = safetensors::SafeTensors::deserialize(&data)
             .map_err(|e| RagError::Other(format!("failed to parse safetensors: {e}")))?;
 
-        let view = st
-            .tensor(hf_name)
-            .map_err(|e| RagError::Other(format!("tensor {hf_name} not found: {e}")))?;
+        for (hf_name, ggml_name) in tensors_in_file {
+            let view = st
+                .tensor(hf_name)
+                .map_err(|e| RagError::Other(format!("tensor {hf_name} not found: {e}")))?;
 
-        let shape: Vec<usize> = view.shape().to_vec();
-        let tensor = tensor_from_safetensors_view(&view, &shape, &device)?;
+            let shape: Vec<usize> = view.shape().to_vec();
+            let tensor = tensor_from_safetensors_view(&view, &shape, &device)?;
 
-        let target_dtype = quant_dtype_for_tensor(ggml_name, quantization);
+            let target_dtype = quant_dtype_for_tensor(ggml_name, quantization);
+            let qtensor = QTensor::quantize(&tensor, target_dtype)?;
 
-        let qtensor = if target_dtype == GgmlDType::F32 {
-            QTensor::quantize(&tensor, GgmlDType::F32)?
-        } else {
-            QTensor::quantize(&tensor, target_dtype)?
-        };
+            quantized_tensors.push((ggml_name.clone(), qtensor));
 
-        quantized_tensors.push((ggml_name.clone(), qtensor));
+            completed += 1;
+            if let Some(cb) = progress_fn {
+                cb(completed, total_tensors);
+            }
+        }
     }
 
     // Build GGUF metadata
