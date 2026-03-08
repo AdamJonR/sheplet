@@ -29,8 +29,10 @@ pub struct Phi3Config {
     #[serde(default)]
     pub eos_token_id: Option<u32>,
     #[serde(default)]
-    pub rope_scaling: Option<String>,
+    pub rope_scaling: Option<serde_json::Value>,
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
 }
 
 impl Phi3Config {
@@ -315,7 +317,12 @@ impl Phi3LoraModel {
             layers.push(layer);
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = if cfg.tie_word_embeddings {
+            let weight = embed_tokens.embeddings().clone();
+            candle_nn::Linear::new(weight, None)
+        } else {
+            linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        };
         Ok(Self {
             embed_tokens,
             layers,

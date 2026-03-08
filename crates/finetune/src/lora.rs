@@ -53,9 +53,17 @@ impl LoraLinear {
         let frozen_out = self.frozen.forward(x)?;
 
         // x @ A^T @ B^T * scale
-        let lora_out = x
-            .matmul(&self.lora_a.t()?)?
-            .matmul(&self.lora_b.t()?)?;
+        // Flatten to 2D for matmul (candle doesn't broadcast 3D @ 2D), then restore shape
+        let dims = x.dims();
+        let lora_out = if dims.len() == 3 {
+            let (b, s, h) = (dims[0], dims[1], dims[2]);
+            let out_2d = x.reshape((b * s, h))?
+                .matmul(&self.lora_a.t()?)?
+                .matmul(&self.lora_b.t()?)?;
+            out_2d.reshape((b, s, out_2d.dims()[1]))?
+        } else {
+            x.matmul(&self.lora_a.t()?)?.matmul(&self.lora_b.t()?)?
+        };
         let lora_out = (lora_out * self.scale)?;
 
         let out = (frozen_out + lora_out)?;
