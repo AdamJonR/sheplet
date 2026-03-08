@@ -3,11 +3,34 @@ use std::sync::mpsc;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::phi3;
+use candle_transformers::models::{gemma2, phi3};
 use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
 use crate::quantized_phi3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelArch {
+    Phi3,
+    Gemma3,
+}
+
+pub fn detect_model_arch(model_dir: impl AsRef<Path>) -> Result<ModelArch> {
+    let (arch, _) = detect_model_arch_with_config(model_dir)?;
+    Ok(arch)
+}
+
+/// Detect model architecture and return the raw config string to avoid re-reading.
+fn detect_model_arch_with_config(model_dir: impl AsRef<Path>) -> Result<(ModelArch, String)> {
+    let config_path = model_dir.as_ref().join("config.json");
+    let config_str = std::fs::read_to_string(&config_path)?;
+    let config: serde_json::Value = serde_json::from_str(&config_str)?;
+    let arch = match config.get("model_type").and_then(|v| v.as_str()) {
+        Some("gemma3_text" | "gemma2") => ModelArch::Gemma3,
+        _ => ModelArch::Phi3,
+    };
+    Ok((arch, config_str))
+}
 
 pub trait TextGenerator: Send {
     fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String>;
@@ -25,29 +48,32 @@ pub trait TextGenerator: Send {
     fn clear_cache(&mut self);
 }
 
-enum PhiModel {
-    Full(phi3::Model),
-    Quantized(quantized_phi3::ModelWeights),
+enum InferenceModel {
+    PhiFull(phi3::Model),
+    PhiQuantized(quantized_phi3::ModelWeights),
+    Gemma3(gemma2::Model),
 }
 
-impl PhiModel {
+impl InferenceModel {
     fn forward(&mut self, input: &Tensor, index_pos: usize) -> candle_core::Result<Tensor> {
         match self {
-            PhiModel::Full(m) => m.forward(input, index_pos),
-            PhiModel::Quantized(m) => m.forward(input, index_pos),
+            InferenceModel::PhiFull(m) => m.forward(input, index_pos),
+            InferenceModel::PhiQuantized(m) => m.forward(input, index_pos),
+            InferenceModel::Gemma3(m) => m.forward(input, index_pos),
         }
     }
 
     fn clear_kv_cache(&mut self) {
         match self {
-            PhiModel::Full(m) => m.clear_kv_cache(),
-            PhiModel::Quantized(m) => m.clear_kv_cache(),
+            InferenceModel::PhiFull(m) => m.clear_kv_cache(),
+            InferenceModel::PhiQuantized(m) => m.clear_kv_cache(),
+            InferenceModel::Gemma3(m) => m.clear_kv_cache(),
         }
     }
 }
 
 pub struct PhiGenerator {
-    model: PhiModel,
+    model: InferenceModel,
     tokenizer: Tokenizer,
     device: Device,
     eos_token_id: u32,
@@ -73,13 +99,9 @@ impl PhiGenerator {
                 .map_err(|e| RagError::Other(format!("failed to read GGUF: {e}")))?;
             let weights = quantized_phi3::ModelWeights::from_gguf(ct, &mut file, device)
                 .map_err(|e| RagError::Other(format!("failed to load quantized model: {e}")))?;
-            PhiModel::Quantized(weights)
+            InferenceModel::PhiQuantized(weights)
         } else {
-            // Fall back to SafeTensors (F32 path)
-            let config_path = model_dir.join("config.json");
-            let config_str = std::fs::read_to_string(&config_path)?;
-            let config: phi3::Config = serde_json::from_str(&config_str)?;
-
+            // Fall back to SafeTensors path
             let mut safetensors_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
                 .filter_map(|e| e.ok())
                 .map(|e| e.path())
@@ -94,30 +116,62 @@ impl PhiGenerator {
                 )));
             }
 
-            let dtype = DType::F32;
-            let vb = unsafe {
-                VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-            };
+            let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
+            match arch {
+                ModelArch::Gemma3 => {
+                    let mut config: gemma2::Config = serde_json::from_str(&config_str)?;
+                    // Gemma 3 1B uses full attention on all layers (no sliding window)
+                    config.sliding_window = None;
 
-            let vb = if let Some(adapter) = adapter_path {
-                if adapter.exists() {
-                    merge_lora_adapter(vb, adapter, device, dtype)?
-                } else {
-                    vb
+                    let dtype = DType::BF16;
+                    let vb = unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    };
+
+                    let vb = if let Some(adapter) = adapter_path {
+                        if adapter.exists() {
+                            merge_lora_adapter(vb, adapter, device, dtype)?
+                        } else {
+                            vb
+                        }
+                    } else {
+                        vb
+                    };
+
+                    let model = gemma2::Model::new(false, &config, vb)?;
+                    InferenceModel::Gemma3(model)
                 }
-            } else {
-                vb
-            };
+                ModelArch::Phi3 => {
+                    let config: phi3::Config = serde_json::from_str(&config_str)?;
 
-            let model = phi3::Model::new(&config, vb)?;
-            PhiModel::Full(model)
+                    let dtype = DType::F32;
+                    let vb = unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    };
+
+                    let vb = if let Some(adapter) = adapter_path {
+                        if adapter.exists() {
+                            merge_lora_adapter(vb, adapter, device, dtype)?
+                        } else {
+                            vb
+                        }
+                    } else {
+                        vb
+                    };
+
+                    let model = phi3::Model::new(&config, vb)?;
+                    InferenceModel::PhiFull(model)
+                }
+            }
         };
 
-        // Get EOS token ID
+        // Get EOS token ID — try model-specific tokens
         let eos_token_id = tokenizer
-            .token_to_id("<|end|>")
+            .token_to_id("<end_of_turn>")
+            .or_else(|| tokenizer.token_to_id("<eos>"))
+            .or_else(|| tokenizer.token_to_id("<|end|>"))
             .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
-            .unwrap_or(2);
+            .unwrap_or(1);
 
         Ok(Self {
             model,

@@ -10,7 +10,8 @@ use tracing::debug;
 
 use crate::config::RagConfig;
 use crate::error::Result;
-use crate::prompt::assemble_prompt;
+use crate::inference::ModelArch;
+use crate::prompt::assemble_prompt_for_arch;
 
 pub enum PreparedQuery {
     Ready {
@@ -26,6 +27,7 @@ pub struct RagPipeline {
     embedder: EmbeddingModel,
     store: VectorStore,
     config: RagConfig,
+    model_arch: ModelArch,
     query_cache: Mutex<LruCache<String, Vec<f32>>>,
 }
 
@@ -34,6 +36,7 @@ impl RagPipeline {
         embeddings_dir: impl AsRef<Path>,
         database_dir: impl AsRef<Path>,
         config: RagConfig,
+        model_arch: ModelArch,
     ) -> Result<Self> {
         let embedder = EmbeddingModel::from_local(embeddings_dir)?;
         let store =
@@ -43,6 +46,7 @@ impl RagPipeline {
             embedder,
             store,
             config,
+            model_arch,
             query_cache: Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())),
         })
     }
@@ -102,7 +106,13 @@ impl RagPipeline {
             })
             .collect();
 
-        let prompt = assemble_prompt(&self.config.system_prompt, results, history, question);
+        let prompt = assemble_prompt_for_arch(
+            self.model_arch,
+            &self.config.system_prompt,
+            results,
+            history,
+            question,
+        );
 
         PreparedQuery::Ready { prompt, citations }
     }
