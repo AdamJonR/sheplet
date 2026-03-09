@@ -1,0 +1,37 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get install -y protobuf-compiler
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace -- -D warnings
+
+  bench-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get install -y protobuf-compiler
+      - name: Compile benchmarks
+        run: cargo bench --workspace --no-run
+      - name: Smoke-run vector search benchmarks
+        run: cargo bench -p db --bench search -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+      - name: Smoke-run prompt benchmarks
+        run: cargo bench -p rag --bench prompt -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+
+  test-metal:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: brew install protobuf
+      - run: cargo test --workspace --features metal

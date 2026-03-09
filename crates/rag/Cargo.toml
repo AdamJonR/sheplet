@@ -25,3 +25,11 @@ tracing.workspace = true
 safetensors.workspace = true
 half.workspace = true
 byteorder.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "prompt"
+harness = false
