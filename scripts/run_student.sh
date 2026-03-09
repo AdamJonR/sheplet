@@ -17,6 +17,9 @@ TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 STUDENT="$PROJECT_ROOT/target/release/sheplet-student"
 
+# --- Detect GPU features ----------------------------------------------------
+source "$SCRIPT_DIR/detect_gpu.sh"
+
 # --- Step 1: Validate prerequisites ------------------------------------------
 
 if [ ! -f "$TEST_DIR/model/model.gguf" ]; then
@@ -30,7 +33,7 @@ fi
 echo ""
 echo "=== Building sheplet-student ==="
 STEP_START=$SECONDS
-cargo build --release -p sheplet-student --manifest-path "$PROJECT_ROOT/Cargo.toml"
+cargo build --release -p sheplet-student $CARGO_FEATURES --manifest-path "$PROJECT_ROOT/Cargo.toml"
 TIME_BUILD=$(( SECONDS - STEP_START ))
 echo "--- Build completed in ${TIME_BUILD}s ---"
 
@@ -39,7 +42,7 @@ echo "--- Build completed in ${TIME_BUILD}s ---"
 if [ ! -f "$INSTRUCTOR" ]; then
     echo ""
     echo "=== Building sheplet-instructor ==="
-    cargo build --release -p sheplet-instructor --manifest-path "$PROJECT_ROOT/Cargo.toml"
+    cargo build --release -p sheplet-instructor $CARGO_FEATURES --manifest-path "$PROJECT_ROOT/Cargo.toml"
 fi
 
 # --- Step 4: Bundle the test project ----------------------------------------

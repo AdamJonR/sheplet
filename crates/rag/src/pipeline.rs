@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use candle_core::Device;
 use conversations::{Citation, Message};
 use db::VectorStore;
 use embeddings::EmbeddingModel;
@@ -37,8 +38,9 @@ impl RagPipeline {
         database_dir: impl AsRef<Path>,
         config: RagConfig,
         model_arch: ModelArch,
+        device: &Device,
     ) -> Result<Self> {
-        let embedder = EmbeddingModel::from_local(embeddings_dir)?;
+        let embedder = EmbeddingModel::from_local(embeddings_dir, device)?;
         embedder.warmup();
         let store =
             VectorStore::open_or_create(database_dir, "chunks", embeddings::EMBEDDING_DIM).await?;

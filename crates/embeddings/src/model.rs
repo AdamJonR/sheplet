@@ -32,7 +32,7 @@ impl EmbeddingModel {
     /// - `model.safetensors`
     /// - `config.json`
     /// - `tokenizer.json`
-    pub fn from_local(dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_local(dir: impl AsRef<Path>, device: &Device) -> Result<Self> {
         let dir = dir.as_ref();
         let config_path = dir.join("config.json");
 
@@ -40,19 +40,19 @@ impl EmbeddingModel {
         if config_path.exists() {
             let weights_path = dir.join("model.safetensors");
             let tokenizer_path = dir.join("tokenizer.json");
-            Self::load_from_files(&config_path, &weights_path, &tokenizer_path)
+            Self::load_from_files(&config_path, &weights_path, &tokenizer_path, device)
         } else {
             let files = crate::download::resolve_cached_files(dir)?;
-            Self::load_from_files(&files.config_json, &files.model_safetensors, &files.tokenizer_json)
+            Self::load_from_files(&files.config_json, &files.model_safetensors, &files.tokenizer_json, device)
         }
     }
 
     /// Download the model from Hugging Face Hub and load it.
     ///
     /// Files are cached in `cache_dir` for subsequent loads.
-    pub fn download_and_load(cache_dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn download_and_load(cache_dir: impl AsRef<Path>, device: &Device) -> Result<Self> {
         let files = download_model_files(cache_dir)?;
-        Self::load_from_files(&files.config_json, &files.model_safetensors, &files.tokenizer_json)
+        Self::load_from_files(&files.config_json, &files.model_safetensors, &files.tokenizer_json, device)
     }
 
     /// Load model from explicit file paths.
@@ -60,8 +60,8 @@ impl EmbeddingModel {
         config_path: &Path,
         weights_path: &Path,
         tokenizer_path: &Path,
+        device: &Device,
     ) -> Result<Self> {
-        let device = Device::Cpu;
 
         // Load config
         let config_text = std::fs::read_to_string(config_path)?;
@@ -69,7 +69,7 @@ impl EmbeddingModel {
 
         // Load weights
         let weights_bytes = std::fs::read(weights_path)?;
-        let vb = VarBuilder::from_buffered_safetensors(weights_bytes, DTYPE, &device)
+        let vb = VarBuilder::from_buffered_safetensors(weights_bytes, DTYPE, device)
             .map_err(|e| EmbeddingsError::ModelLoad(format!("failed to load weights: {e}")))?;
 
         // Build model
@@ -93,7 +93,7 @@ impl EmbeddingModel {
         Ok(Self {
             model,
             tokenizer,
-            device,
+            device: device.clone(),
         })
     }
 

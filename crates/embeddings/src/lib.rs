@@ -26,7 +26,7 @@ mod tests {
     #[ignore]
     fn test_embed_and_cosine_similarity() {
         let cache_dir = tempfile::tempdir().unwrap();
-        let model = EmbeddingModel::download_and_load(cache_dir.path()).unwrap();
+        let model = EmbeddingModel::download_and_load(cache_dir.path(), &candle_core::Device::Cpu).unwrap();
 
         let similar_a = "The cat sat on the mat.";
         let similar_b = "A cat was sitting on a rug.";
@@ -63,7 +63,7 @@ mod tests {
     #[ignore]
     fn test_embed_single_consistency() {
         let cache_dir = tempfile::tempdir().unwrap();
-        let model = EmbeddingModel::download_and_load(cache_dir.path()).unwrap();
+        let model = EmbeddingModel::download_and_load(cache_dir.path(), &candle_core::Device::Cpu).unwrap();
 
         let text = "Hello, world!";
         let single = model.embed(text).unwrap();

@@ -41,6 +41,9 @@ echo "Model: $MODEL_NAME (quantization: $QUANTIZATION)"
 
 TOTAL_START=$SECONDS
 
+# --- Detect GPU features ----------------------------------------------------
+source "$SCRIPT_DIR/detect_gpu.sh"
+
 # --- Step 1: Cleanup ---------------------------------------------------------
 
 if [ -d "$TEST_DIR" ]; then
@@ -53,7 +56,7 @@ fi
 echo ""
 echo "=== Build ==="
 STEP_START=$SECONDS
-cargo build --release -p sheplet-instructor --manifest-path "$PROJECT_ROOT/Cargo.toml"
+cargo build --release -p sheplet-instructor $CARGO_FEATURES --manifest-path "$PROJECT_ROOT/Cargo.toml"
 TIME_BUILD=$(( SECONDS - STEP_START ))
 echo "--- Build completed in ${TIME_BUILD}s ---"
 

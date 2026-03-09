@@ -107,7 +107,8 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
 
     // Also download embedding model
     let pb = progress::spinner("Downloading embedding model...");
-    let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings)
+    let device = compute::device_for(compute::Workload::Embedding);
+    let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings, &device)
         .context("failed to download embedding model")?;
     pb.finish_with_message("Embedding model downloaded.");
 

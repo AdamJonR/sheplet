@@ -12,6 +12,7 @@ members = [
     "crates/bundle",
     "crates/conversations",
     "crates/project",
+    "crates/compute",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ db = { path = "crates/db" }
 bundle = { path = "crates/bundle" }
 conversations = { path = "crates/conversations" }
 project = { path = "crates/project" }
+compute = { path = "crates/compute" }
 
 # ML / inference
 candle-core = "0.8"

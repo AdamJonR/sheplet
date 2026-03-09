@@ -1,0 +1,15 @@
+[package]
+name = "compute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+candle-core.workspace = true
+
+[features]
+default = []
+metal = ["candle-core/metal"]
+cuda = ["candle-core/cuda"]
+accelerate = ["candle-core/accelerate"]
+mkl = ["candle-core/mkl"]

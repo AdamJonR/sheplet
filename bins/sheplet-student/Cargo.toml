@@ -14,6 +14,7 @@ embeddings.workspace = true
 db.workspace = true
 bundle.workspace = true
 conversations.workspace = true
+compute.workspace = true
 
 candle-core.workspace = true
 axum.workspace = true
@@ -26,3 +27,10 @@ anyhow.workspace = true
 thiserror.workspace = true
 hex.workspace = true
 dirs.workspace = true
+
+[features]
+default = []
+metal = ["compute/metal"]
+cuda = ["compute/cuda"]
+accelerate = ["compute/accelerate"]
+mkl = ["compute/mkl"]

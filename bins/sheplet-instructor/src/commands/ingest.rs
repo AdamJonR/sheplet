@@ -26,7 +26,8 @@ pub async fn run(sources: &Path, project: &Path) -> Result<()> {
 
     // Step 2: Load or download embedding model
     let pb = progress::spinner("Loading embedding model...");
-    let embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings)
+    let device = compute::device_for(compute::Workload::Embedding);
+    let embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings, &device)
         .context("failed to load embedding model")?;
     pb.finish_with_message("Embedding model loaded.");
 

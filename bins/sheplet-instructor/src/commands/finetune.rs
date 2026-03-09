@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use candle_core::Device;
 use candle_nn::Linear;
 use std::path::Path;
 
@@ -27,7 +26,7 @@ pub fn run(
 ) -> Result<()> {
     let _manifest = require_model(project)?;
     let dirs = project_dirs(project);
-    let device = Device::Cpu;
+    let device = compute::device_for(compute::Workload::Training);
 
     // Hardware preflight
     let report = finetune::preflight::preflight_check(16.0);

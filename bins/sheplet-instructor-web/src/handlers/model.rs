@@ -147,7 +147,8 @@ fn run_model_download(
     let _ = tx.send(TaskEvent::StepStarted {
         step: "Downloading embedding model".to_string(),
     });
-    let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings)?;
+    let device = compute::device_for(compute::Workload::Embedding);
+    let _embedding_model = embeddings::EmbeddingModel::download_and_load(&dirs.embeddings, &device)?;
     let _ = tx.send(TaskEvent::StepCompleted {
         step: "Downloading embedding model".to_string(),
         detail: "Embedding model ready".to_string(),

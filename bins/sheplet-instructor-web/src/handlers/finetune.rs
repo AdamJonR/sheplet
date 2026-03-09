@@ -91,7 +91,7 @@ fn run_finetune(
     tx: &tokio::sync::broadcast::Sender<TaskEvent>,
 ) -> anyhow::Result<()> {
     let dirs = project_dirs(project_path);
-    let device = candle_core::Device::Cpu;
+    let device = compute::device_for(compute::Workload::Training);
 
     // Hardware preflight
     let _ = tx.send(TaskEvent::StepStarted {

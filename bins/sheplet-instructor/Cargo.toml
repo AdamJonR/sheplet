@@ -16,6 +16,7 @@ rag.workspace = true
 finetune.workspace = true
 bundle.workspace = true
 project.workspace = true
+compute.workspace = true
 
 candle-core.workspace = true
 candle-nn.workspace = true
@@ -32,6 +33,13 @@ thiserror.workspace = true
 indicatif.workspace = true
 dirs.workspace = true
 hex.workspace = true
+
+[features]
+default = []
+metal = ["compute/metal"]
+cuda = ["compute/cuda"]
+accelerate = ["compute/accelerate"]
+mkl = ["compute/mkl"]
 
 [dev-dependencies]
 tempfile.workspace = true

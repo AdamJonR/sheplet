@@ -110,8 +110,9 @@ async fn run_ingest(
         step: "Loading embedding model".to_string(),
     });
     let emb_dir = dirs.embeddings.clone();
+    let device = compute::device_for(compute::Workload::Embedding);
     let embedding_model = tokio::task::spawn_blocking(move || {
-        embeddings::EmbeddingModel::download_and_load(&emb_dir)
+        embeddings::EmbeddingModel::download_and_load(&emb_dir, &device)
     })
     .await??;
     let _ = tx.send(TaskEvent::StepCompleted {

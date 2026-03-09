@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use bundle::Manifest;
-use candle_core::Device;
 use rag::{PhiGenerator, RagConfig, RagPipeline};
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -110,11 +109,13 @@ impl CourseManager {
         let model_arch = rag::detect_model_arch(course_dir.join("model"))
             .unwrap_or(rag::ModelArch::Phi3);
 
+        let embedding_device = compute::device_for(compute::Workload::Embedding);
         let pipeline = RagPipeline::new(
             course_dir.join("embeddings"),
             course_dir.join("database"),
             metadata.config.clone(),
             model_arch,
+            &embedding_device,
         )
         .await?;
 
@@ -125,7 +126,8 @@ impl CourseManager {
             None
         };
 
-        let generator = PhiGenerator::load(course_dir.join("model"), adapter, &Device::Cpu)?;
+        let device = compute::device_for(compute::Workload::Inference);
+        let generator = PhiGenerator::load(course_dir.join("model"), adapter, &device)?;
 
         self.active = Some(LoadedCourse {
             metadata,
