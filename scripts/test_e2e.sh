@@ -246,7 +246,7 @@ echo "--- DPO Train completed in ${TIME_DPO}s ---"
 echo ""
 echo "=== Config ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" config --project "$TEST_DIR" --system_prompt "You are a helpful biology tutor. Answer questions accurately using course materials."
+"$INSTRUCTOR" config --project "$TEST_DIR" --system-prompt "You are a helpful biology tutor. Answer questions accurately using course materials."
 TIME_CONFIG=$(( SECONDS - STEP_START ))
 echo "--- Config completed in ${TIME_CONFIG}s ---"
 
