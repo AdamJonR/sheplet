@@ -41,7 +41,7 @@ pub enum Commands {
 
     /// Download and quantize a model
     Model {
-        /// Model name (e.g., phi-4-mini-instruct)
+        /// Model name (phi-4-mini-instruct, gemma270m, gemma1b, or HF repo ID)
         #[arg(long, default_value = "phi-4-mini-instruct")]
         name: String,
         /// Quantization level

@@ -7,7 +7,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::app_state::AppState;
-use crate::project::{project_dirs, require_init, ProjectManifest};
+use crate::project::{project_dirs, require_init, ProjectManifest, local_model_source, copy_local_model, is_gemma_model};
 use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
 
@@ -62,86 +62,116 @@ fn run_model_download(
     let mut manifest = ProjectManifest::load(project_path)?;
     let dirs = project_dirs(project_path);
 
-    let repo_id = match name {
-        "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
-        "gemma-3-1b-it" => "google/gemma-3-1b-it",
-        other => other,
-    };
-
-    // Step 1: Download model files
-    let _ = tx.send(TaskEvent::StepStarted {
-        step: "Downloading model".to_string(),
-    });
-    let api = hf_hub::api::sync::Api::new()?;
-    let repo = api.model(repo_id.to_string());
-    let model_dir = &dirs.model;
-    std::fs::create_dir_all(model_dir)?;
-
-    for filename in &["config.json", "tokenizer.json", "tokenizer_config.json"] {
-        match repo.get(filename) {
-            Ok(src_path) => {
-                let dest = model_dir.join(filename);
-                if src_path != dest {
-                    std::fs::copy(&src_path, &dest)?;
-                }
-            }
-            Err(e) => {
-                let _ = tx.send(TaskEvent::Log {
-                    message: format!("Warning: could not download {filename}: {e}"),
-                });
-            }
-        }
+    // Guard: GGUF quantization is not supported for Gemma models
+    if is_gemma_model(name) && quantization != "none" {
+        anyhow::bail!(
+            "GGUF quantization is not supported for Gemma models yet \
+             (the quantizer's tensor name mapper is Phi-specific). \
+             Use quantization \"none\" for Gemma models."
+        );
     }
 
-    // Download model weights
-    match repo.get("model.safetensors") {
-        Ok(src_path) => {
-            let dest = model_dir.join("model.safetensors");
-            if src_path != dest {
-                std::fs::copy(&src_path, &dest)?;
-            }
+    let model_dir = &dirs.model;
+
+    // Check if this is a locally available model first
+    if let Some(local_dir_name) = local_model_source(name) {
+        let src_dir = std::env::current_dir()?.join("downloaded-models").join(local_dir_name);
+        if !src_dir.exists() {
+            anyhow::bail!(
+                "Local model directory not found: {}. \
+                 Please download the model first.",
+                src_dir.display()
+            );
         }
-        Err(_) => {
-            match repo.get("model.safetensors.index.json") {
-                Ok(index_path) => {
-                    let dest = model_dir.join("model.safetensors.index.json");
-                    if index_path != dest {
-                        std::fs::copy(&index_path, &dest)?;
-                    }
-                    let index_content = std::fs::read_to_string(&index_path)?;
-                    let index: serde_json::Value = serde_json::from_str(&index_content)?;
-                    if let Some(weight_map) = index.get("weight_map").and_then(|v| v.as_object()) {
-                        let shard_files: std::collections::HashSet<&str> =
-                            weight_map.values().filter_map(|v| v.as_str()).collect();
-                        for shard in shard_files {
-                            match repo.get(shard) {
-                                Ok(src_path) => {
-                                    let dest = model_dir.join(shard);
-                                    if src_path != dest {
-                                        std::fs::copy(&src_path, &dest)?;
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(TaskEvent::Log {
-                                        message: format!("Warning: could not download shard {shard}: {e}"),
-                                    });
-                                }
-                            }
-                        }
+        let _ = tx.send(TaskEvent::StepStarted {
+            step: "Copying local model".to_string(),
+        });
+        copy_local_model(&src_dir, model_dir)?;
+        let _ = tx.send(TaskEvent::StepCompleted {
+            step: "Copying local model".to_string(),
+            detail: format!("Model {name} copied from local files"),
+        });
+    } else {
+        let repo_id = match name {
+            "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
+            "gemma-3-1b-it" => "google/gemma-3-1b-it",
+            other => other,
+        };
+
+        // Step 1: Download model files
+        let _ = tx.send(TaskEvent::StepStarted {
+            step: "Downloading model".to_string(),
+        });
+        let api = hf_hub::api::sync::Api::new()?;
+        let repo = api.model(repo_id.to_string());
+        std::fs::create_dir_all(model_dir)?;
+
+        for filename in &["config.json", "tokenizer.json", "tokenizer_config.json"] {
+            match repo.get(filename) {
+                Ok(src_path) => {
+                    let dest = model_dir.join(filename);
+                    if src_path != dest {
+                        std::fs::copy(&src_path, &dest)?;
                     }
                 }
                 Err(e) => {
                     let _ = tx.send(TaskEvent::Log {
-                        message: format!("Warning: could not find model weights: {e}"),
+                        message: format!("Warning: could not download {filename}: {e}"),
                     });
                 }
             }
         }
+
+        // Download model weights
+        match repo.get("model.safetensors") {
+            Ok(src_path) => {
+                let dest = model_dir.join("model.safetensors");
+                if src_path != dest {
+                    std::fs::copy(&src_path, &dest)?;
+                }
+            }
+            Err(_) => {
+                match repo.get("model.safetensors.index.json") {
+                    Ok(index_path) => {
+                        let dest = model_dir.join("model.safetensors.index.json");
+                        if index_path != dest {
+                            std::fs::copy(&index_path, &dest)?;
+                        }
+                        let index_content = std::fs::read_to_string(&index_path)?;
+                        let index: serde_json::Value = serde_json::from_str(&index_content)?;
+                        if let Some(weight_map) = index.get("weight_map").and_then(|v| v.as_object()) {
+                            let shard_files: std::collections::HashSet<&str> =
+                                weight_map.values().filter_map(|v| v.as_str()).collect();
+                            for shard in shard_files {
+                                match repo.get(shard) {
+                                    Ok(src_path) => {
+                                        let dest = model_dir.join(shard);
+                                        if src_path != dest {
+                                            std::fs::copy(&src_path, &dest)?;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(TaskEvent::Log {
+                                            message: format!("Warning: could not download shard {shard}: {e}"),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TaskEvent::Log {
+                            message: format!("Warning: could not find model weights: {e}"),
+                        });
+                    }
+                }
+            }
+        }
+        let _ = tx.send(TaskEvent::StepCompleted {
+            step: "Downloading model".to_string(),
+            detail: format!("Model {repo_id} downloaded"),
+        });
     }
-    let _ = tx.send(TaskEvent::StepCompleted {
-        step: "Downloading model".to_string(),
-        detail: format!("Model {repo_id} downloaded"),
-    });
 
     // Step 2: Download embedding model
     let _ = tx.send(TaskEvent::StepStarted {

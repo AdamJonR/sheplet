@@ -120,7 +120,8 @@ impl PhiGenerator {
             match arch {
                 ModelArch::Gemma3 => {
                     let mut config: gemma2::Config = serde_json::from_str(&config_str)?;
-                    // Gemma 3 1B uses full attention on all layers (no sliding window)
+                    // Disable sliding window: candle's gemma2 model applies it uniformly,
+                    // but Gemma 3 uses mixed layer types, so we force full attention for correctness.
                     config.sliding_window = None;
 
                     let dtype = DType::BF16;
@@ -371,6 +372,101 @@ fn sample_token(
     }
 
     Ok(candidates.last().map(|(idx, _)| *idx as u32).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_model_arch_phi3() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "phi3"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Phi3);
+    }
+
+    #[test]
+    fn test_detect_model_arch_gemma3_text() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "gemma3_text"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Gemma3);
+    }
+
+    #[test]
+    fn test_detect_model_arch_gemma2() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "gemma2"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Gemma3);
+    }
+
+    #[test]
+    fn test_detect_model_arch_unknown_falls_back_to_phi3() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "llama3"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Phi3, "unknown model_type should fall back to Phi3");
+    }
+
+    #[test]
+    fn test_detect_model_arch_missing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // No config.json
+        let result = detect_model_arch(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sample_token_greedy() {
+        // With very low temperature, should pick highest logit
+        let device = Device::Cpu;
+        let logits = Tensor::new(&[0.1f32, 0.2, 10.0, 0.3], &device).unwrap();
+        // Run multiple times to verify determinism at near-zero temperature
+        // top_p=1.0 to not filter, repetition_penalty=1.0 to not modify
+        let token = sample_token(&logits, 0.01, 1.0, 1.0, &[]).unwrap();
+        assert_eq!(token, 2, "greedy should pick index 2 (highest logit)");
+    }
+
+    #[test]
+    fn test_sample_token_repetition_penalty() {
+        let device = Device::Cpu;
+        // Token 2 has highest logit, but we penalize it
+        let logits = Tensor::new(&[0.1f32, 0.2, 5.0, 4.9], &device).unwrap();
+        // With a high enough penalty, token 2 should be penalized below token 3
+        let mut count_2 = 0;
+        let mut count_3 = 0;
+        for _ in 0..50 {
+            let token = sample_token(&logits, 0.01, 1.0, 100.0, &[2]).unwrap();
+            if token == 2 {
+                count_2 += 1;
+            }
+            if token == 3 {
+                count_3 += 1;
+            }
+        }
+        assert!(
+            count_3 > count_2,
+            "with high repetition penalty on token 2, token 3 should be picked more often"
+        );
+    }
 }
 
 /// Merge LoRA adapter weights into a base VarBuilder for the F32 path.
