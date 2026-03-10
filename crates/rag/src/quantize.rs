@@ -512,6 +512,27 @@ mod tests {
     }
 
     #[test]
+    fn test_quant_dtype_for_embedding() {
+        // Embedding layers should always get F32 regardless of scheme
+        assert_eq!(
+            quant_dtype_for_tensor("token_embd.weight", "q4-k-m"),
+            GgmlDType::F32
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("output.weight", "q4-k-m"),
+            GgmlDType::F32
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("token_embd.weight", "q8-0"),
+            GgmlDType::F32
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("output.weight", "q5-k-m"),
+            GgmlDType::F32
+        );
+    }
+
+    #[test]
     fn test_gguf_write_read_round_trip() {
         use candle_core::quantized::gguf_file;
         let device = Device::Cpu;

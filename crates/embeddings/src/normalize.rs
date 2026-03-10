@@ -117,6 +117,21 @@ mod tests {
     }
 
     #[test]
+    fn test_l2_normalize_zero_vector() {
+        let device = Device::Cpu;
+        // Zero vector should not produce NaN (clamped denominator)
+        let x = Tensor::zeros(&[1, 4], candle_core::DType::F32, &device).unwrap();
+        let result = l2_normalize(&x).unwrap();
+        let values: Vec<f32> = result.squeeze(0).unwrap().to_vec1().unwrap();
+        for (i, v) in values.iter().enumerate() {
+            assert!(
+                !v.is_nan(),
+                "l2_normalize of zero vector should not produce NaN at index {i}"
+            );
+        }
+    }
+
+    #[test]
     fn test_l2_normalize_values() {
         let device = Device::Cpu;
         // [3, 4] -> norm=5 -> [0.6, 0.8]

@@ -236,6 +236,54 @@ impl VectorStore {
         Ok(count)
     }
 
+    /// Read all rows from the table for bulk loading into memory.
+    ///
+    /// Returns `(vector, text, source_file, chunk_index)` tuples.
+    pub async fn read_all(&self) -> Result<Vec<(Vec<f32>, String, String, u32)>> {
+        let table = self.open_table().await?;
+        let mut stream = table
+            .query()
+            .select(Select::columns(&[
+                "vector",
+                "text",
+                "source_file",
+                "chunk_index",
+            ]))
+            .execute()
+            .await?;
+
+        let batches = Self::collect_batches(&mut stream).await?;
+        let mut rows = Vec::new();
+        for batch in &batches {
+            let text_arr = string_column(batch, "text");
+            let source_arr = string_column(batch, "source_file");
+            let chunk_arr = uint32_column(batch, "chunk_index");
+            let vector_col = batch
+                .column_by_name("vector")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .unwrap();
+
+            for i in 0..batch.num_rows() {
+                let vec_arr = vector_col
+                    .value(i)
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec();
+                rows.push((
+                    vec_arr,
+                    text_arr.value(i).to_string(),
+                    source_arr.value(i).to_string(),
+                    chunk_arr.value(i),
+                ));
+            }
+        }
+        Ok(rows)
+    }
+
     /// Delete all rows from the table.
     pub async fn clear(&self) -> Result<()> {
         let table = self.open_table().await?;
@@ -572,6 +620,77 @@ mod tests {
         ];
         store.insert(&records).await.unwrap();
         assert_eq!(store.count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_table() {
+        let dir = TempDir::new().unwrap();
+        let dim = 4;
+        let store = VectorStore::open_or_create(dir.path(), "test", dim)
+            .await
+            .unwrap();
+
+        let query = vec![1.0f32, 0.0, 0.0, 0.0];
+        let results = store.search_top_k(&query, 5).await.unwrap();
+        assert!(results.is_empty(), "search on empty table should return no results");
+    }
+
+    #[tokio::test]
+    async fn test_clear_and_recount() {
+        let dir = TempDir::new().unwrap();
+        let dim = 4;
+        let store = VectorStore::open_or_create(dir.path(), "test", dim)
+            .await
+            .unwrap();
+
+        let records = vec![
+            ChunkRecord {
+                vector: vec![1.0, 2.0, 3.0, 4.0],
+                text: "a".into(),
+                source_file: "f.txt".into(),
+                chunk_index: 0,
+            },
+            ChunkRecord {
+                vector: vec![5.0, 6.0, 7.0, 8.0],
+                text: "b".into(),
+                source_file: "f.txt".into(),
+                chunk_index: 1,
+            },
+        ];
+        store.insert(&records).await.unwrap();
+        assert_eq!(store.count().await.unwrap(), 2);
+
+        store.clear().await.unwrap();
+        assert_eq!(store.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_topk_greater_than_records() {
+        let dir = TempDir::new().unwrap();
+        let dim = 4;
+        let store = VectorStore::open_or_create(dir.path(), "test", dim)
+            .await
+            .unwrap();
+
+        let records = vec![
+            ChunkRecord {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "one".into(),
+                source_file: "f.txt".into(),
+                chunk_index: 0,
+            },
+            ChunkRecord {
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                text: "two".into(),
+                source_file: "f.txt".into(),
+                chunk_index: 1,
+            },
+        ];
+        store.insert(&records).await.unwrap();
+
+        // Ask for 100 results when only 2 exist
+        let results = store.search_top_k(&[1.0, 0.0, 0.0, 0.0], 100).await.unwrap();
+        assert_eq!(results.len(), 2, "should return all available records");
     }
 
     #[tokio::test]

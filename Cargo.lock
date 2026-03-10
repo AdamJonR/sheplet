@@ -6798,6 +6798,7 @@ name = "sheplet-student"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "axum",
  "bundle",
  "candle-core",
@@ -6807,12 +6808,17 @@ dependencies = [
  "dirs 6.0.0",
  "embeddings",
  "hex",
+ "http-body-util",
+ "hyper 1.8.1",
+ "predicates",
  "rag",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tower",
  "tower-http",
 ]
 

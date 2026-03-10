@@ -3,7 +3,7 @@ use std::sync::mpsc;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::{gemma2, phi3};
+use candle_transformers::models::phi3;
 use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
@@ -51,7 +51,7 @@ pub trait TextGenerator: Send {
 enum InferenceModel {
     PhiFull(phi3::Model),
     PhiQuantized(quantized_phi3::ModelWeights),
-    Gemma3(gemma2::Model),
+    Gemma3(crate::gemma3::Gemma3Model),
 }
 
 impl InferenceModel {
@@ -119,45 +119,41 @@ impl PhiGenerator {
             let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
             match arch {
                 ModelArch::Gemma3 => {
-                    let mut config: gemma2::Config = serde_json::from_str(&config_str)?;
-                    // Disable sliding window: candle's gemma2 model applies it uniformly,
-                    // but Gemma 3 uses mixed layer types, so we force full attention for correctness.
-                    config.sliding_window = None;
+                    let config: crate::gemma3::Gemma3Config =
+                        serde_json::from_str(&config_str)?;
 
-                    let dtype = DType::BF16;
-                    let vb = unsafe {
-                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                    };
-
-                    let vb = if let Some(adapter) = adapter_path {
-                        if adapter.exists() {
-                            merge_lora_adapter(vb, adapter, device, dtype)?
-                        } else {
-                            vb
-                        }
+                    let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
+                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                        merge_lora_adapter(
+                            &safetensors_files,
+                            adapter_path.unwrap(),
+                            device,
+                            dtype,
+                        )?
                     } else {
-                        vb
+                        unsafe {
+                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                        }
                     };
 
-                    let model = gemma2::Model::new(false, &config, vb)?;
+                    let model = crate::gemma3::Gemma3Model::new(&config, vb)?;
                     InferenceModel::Gemma3(model)
                 }
                 ModelArch::Phi3 => {
                     let config: phi3::Config = serde_json::from_str(&config_str)?;
 
                     let dtype = DType::F32;
-                    let vb = unsafe {
-                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                    };
-
-                    let vb = if let Some(adapter) = adapter_path {
-                        if adapter.exists() {
-                            merge_lora_adapter(vb, adapter, device, dtype)?
-                        } else {
-                            vb
-                        }
+                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                        merge_lora_adapter(
+                            &safetensors_files,
+                            adapter_path.unwrap(),
+                            device,
+                            dtype,
+                        )?
                     } else {
-                        vb
+                        unsafe {
+                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                        }
                     };
 
                     let model = phi3::Model::new(&config, vb)?;
@@ -194,7 +190,7 @@ impl PhiGenerator {
 
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+        let logits = last_token_logits(&logits)?;
         let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if next_token == self.eos_token_id {
@@ -206,7 +202,7 @@ impl PhiGenerator {
         for i in 1..max_tokens {
             let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = last_token_logits(&logits)?;
             let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &generated)?;
 
             if next_token == self.eos_token_id {
@@ -260,7 +256,7 @@ impl TextGenerator for PhiGenerator {
 
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+        let logits = last_token_logits(&logits)?;
         let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if first_token == self.eos_token_id {
@@ -286,7 +282,7 @@ impl TextGenerator for PhiGenerator {
             let last_token = *tokens.last().unwrap();
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = last_token_logits(&logits)?;
             let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &all_generated)?;
 
             if next_token == self.eos_token_id {
@@ -319,6 +315,29 @@ impl TextGenerator for PhiGenerator {
     fn clear_cache(&mut self) {
         self.model.clear_kv_cache();
     }
+}
+
+/// Extract the last token's logits as a 1D tensor from model output.
+/// Handles varying output shapes: [vocab], [seq, vocab], or [batch, seq, vocab].
+fn last_token_logits(logits: &Tensor) -> Result<Tensor> {
+    let logits = match logits.dims() {
+        [_vocab] => logits.clone(),
+        [_seq, _vocab] => {
+            let seq = logits.dim(0)?;
+            logits.get(seq - 1)?
+        }
+        [_batch, _seq, _vocab] => {
+            let batch_last = logits.get(logits.dim(0)? - 1)?;
+            let seq = batch_last.dim(0)?;
+            batch_last.get(seq - 1)?
+        }
+        dims => {
+            return Err(RagError::Other(format!(
+                "unexpected logits shape: {dims:?}"
+            )));
+        }
+    };
+    Ok(logits.to_dtype(DType::F32)?)
 }
 
 fn sample_token(
@@ -435,6 +454,135 @@ mod tests {
     }
 
     #[test]
+    fn test_lora_layer_to_weight_path_phi3() {
+        assert_eq!(
+            lora_layer_to_weight_path("layers.0.qkv_proj"),
+            "model.layers.0.self_attn.qkv_proj.weight"
+        );
+    }
+
+    #[test]
+    fn test_lora_layer_to_weight_path_gemma3() {
+        assert_eq!(
+            lora_layer_to_weight_path("layers.0.q_proj"),
+            "model.layers.0.self_attn.q_proj.weight"
+        );
+        assert_eq!(
+            lora_layer_to_weight_path("layers.5.o_proj"),
+            "model.layers.5.self_attn.o_proj.weight"
+        );
+    }
+
+    #[test]
+    fn test_merge_lora_adapter_modifies_weights() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        // Create a base "model" with a single weight tensor (all ones)
+        let base_weight = Tensor::ones(&[4, 8], dtype, &device).unwrap();
+        let mut base_tensors = std::collections::HashMap::new();
+        base_tensors.insert(
+            "model.layers.0.self_attn.q_proj.weight".to_string(),
+            base_weight.clone(),
+        );
+
+        let base_path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&base_tensors, &base_path).unwrap();
+
+        // Create adapter: lora_a=ones(2,8), lora_b=ones(4,2), scale=1.0
+        // delta = B @ A * scale = ones(4,2) @ ones(2,8) * 1.0 = 2*ones(4,8)
+        let lora_a = Tensor::ones(&[2, 8], DType::F32, &device).unwrap();
+        let lora_b = Tensor::ones(&[4, 2], DType::F32, &device).unwrap();
+        let scale = Tensor::from_vec(vec![1.0f32], &[1], &device).unwrap();
+
+        let mut adapter_tensors = std::collections::HashMap::new();
+        adapter_tensors.insert("layers.0.q_proj.lora_a".to_string(), lora_a);
+        adapter_tensors.insert("layers.0.q_proj.lora_b".to_string(), lora_b);
+        adapter_tensors.insert("lora_scale".to_string(), scale);
+
+        let adapter_path = dir.path().join("adapter.safetensors");
+        candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
+
+        // Merge
+        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype).unwrap();
+
+        // Get merged weight
+        let merged_weight = vb
+            .pp("model.layers.0.self_attn.q_proj")
+            .get((4, 8), "weight")
+            .unwrap();
+
+        // Verify weight was modified: base=1.0, delta=2.0, merged=3.0
+        let diff_from_base = (&merged_weight - &base_weight)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff_from_base > 0.0, "merged weights should differ from base");
+
+        // Each element should be 3.0 (1.0 + 2.0)
+        let expected = Tensor::from_vec(vec![3.0f32; 32], &[4, 8], &device).unwrap();
+        let diff = (&merged_weight - &expected)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff < 1e-5, "merged weight values should be 3.0, diff={diff}");
+    }
+
+    #[test]
+    fn test_merge_lora_adapter_no_lora_pairs() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        // Create base model
+        let base_weight = Tensor::ones(&[4, 8], dtype, &device).unwrap();
+        let mut base_tensors = std::collections::HashMap::new();
+        base_tensors.insert(
+            "model.layers.0.self_attn.q_proj.weight".to_string(),
+            base_weight.clone(),
+        );
+        let base_path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&base_tensors, &base_path).unwrap();
+
+        // Create adapter with no LoRA pairs
+        let mut adapter_tensors = std::collections::HashMap::new();
+        adapter_tensors.insert(
+            "some_other_tensor".to_string(),
+            Tensor::ones(&[2], DType::F32, &device).unwrap(),
+        );
+        let adapter_path = dir.path().join("adapter.safetensors");
+        candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
+
+        // Merge
+        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype).unwrap();
+
+        // Weight should be unchanged
+        let weight = vb
+            .pp("model.layers.0.self_attn.q_proj")
+            .get((4, 8), "weight")
+            .unwrap();
+
+        let diff = (&weight - &base_weight)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff < 1e-6, "weights should be unchanged when no LoRA pairs");
+    }
+
+    #[test]
     fn test_sample_token_greedy() {
         // With very low temperature, should pick highest logit
         let device = Device::Cpu;
@@ -469,17 +617,26 @@ mod tests {
     }
 }
 
-/// Merge LoRA adapter weights into a base VarBuilder for the F32 path.
+/// Merge LoRA adapter weights into base model weights.
 ///
-/// For each LoRA pair (lora_a, lora_b) keyed by layer path, computes:
-///   W_merged = W_base + (B @ A) * scale
-/// and constructs a new VarBuilder with the merged weights.
-fn merge_lora_adapter<'a>(
-    base_vb: VarBuilder<'a>,
+/// Loads all base safetensors into memory, applies LoRA deltas
+/// (W_merged = W_base + B @ A * scale), and returns a VarBuilder
+/// from the merged tensors.
+fn merge_lora_adapter(
+    safetensors_files: &[std::path::PathBuf],
     adapter_path: &Path,
     device: &Device,
     dtype: DType,
-) -> Result<VarBuilder<'a>> {
+) -> Result<VarBuilder<'static>> {
+    // Load all base tensors into memory
+    let mut base_tensors: std::collections::HashMap<String, Tensor> =
+        std::collections::HashMap::new();
+    for file in safetensors_files {
+        let tensors = candle_core::safetensors::load(file, device)?;
+        base_tensors.extend(tensors);
+    }
+
+    // Load adapter tensors
     let adapter_data = candle_core::safetensors::load(adapter_path, device)?;
 
     // Group LoRA tensors by layer name
@@ -502,21 +659,20 @@ fn merge_lora_adapter<'a>(
     }
 
     if lora_pairs.is_empty() {
-        // No LoRA pairs found - might be old single-layer format, skip merge
-        return Ok(base_vb);
+        return Ok(VarBuilder::from_tensors(base_tensors, dtype, device));
     }
 
     // Extract scale from adapter config if present, default to alpha/rank = 16/8 = 2.0
+    // Handle both scalar (rank 0) and [1]-shaped tensors
     let scale = adapter_data
         .get("lora_scale")
-        .and_then(|t| t.to_scalar::<f32>().ok())
+        .and_then(|t| t.flatten_all().ok())
+        .and_then(|t| t.to_vec1::<f32>().ok())
+        .and_then(|v| v.into_iter().next())
         .map(|s| s as f64)
         .unwrap_or(2.0);
 
-    // Build merged tensors
-    let mut merged: std::collections::HashMap<String, Tensor> =
-        std::collections::HashMap::new();
-
+    // Apply LoRA deltas to base weights
     for (layer_name, (lora_a, lora_b)) in &lora_pairs {
         if let (Some(a), Some(b)) = (lora_a, lora_b) {
             // W_delta = B @ A * scale
@@ -524,24 +680,15 @@ fn merge_lora_adapter<'a>(
             let delta = (delta * scale)?;
 
             // Map LoRA layer name to the model weight path
-            // e.g. "layers.0.qkv_proj" -> "model.layers.0.self_attn.qkv_proj.weight"
             let weight_path = lora_layer_to_weight_path(layer_name);
-            merged.insert(weight_path, delta);
+            if let Some(base_weight) = base_tensors.get(&weight_path) {
+                let merged = (base_weight + &delta)?;
+                base_tensors.insert(weight_path, merged);
+            }
         }
     }
 
-    if merged.is_empty() {
-        return Ok(base_vb);
-    }
-
-    // We can't directly modify the mmap'd VarBuilder, so we return a layered one
-    // that will add the deltas when weights are loaded.
-    // For now, since candle doesn't have a built-in delta VarBuilder,
-    // we return the base as-is and note that runtime LoRA application
-    // would be needed for the quantized path.
-    // The F32 path with LoRA merge requires loading all tensors into memory,
-    // which we defer to when full model training is tested end-to-end.
-    Ok(base_vb)
+    Ok(VarBuilder::from_tensors(base_tensors, dtype, device))
 }
 
 /// Map a LoRA layer name to the corresponding model weight tensor path.

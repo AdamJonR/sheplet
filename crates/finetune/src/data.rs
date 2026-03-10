@@ -132,6 +132,17 @@ mod tests {
     }
 
     #[test]
+    fn test_load_missing_file_returns_error() {
+        let result = load_dpo_data("/nonexistent/path/to/data.jsonl");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FinetuneError::DataLoading(_)),
+            "expected DataLoading error, got: {err:?}"
+        );
+    }
+
+    #[test]
     fn test_load_with_empty_lines() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gaps.jsonl");

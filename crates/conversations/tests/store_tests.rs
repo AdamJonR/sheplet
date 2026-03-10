@@ -159,6 +159,37 @@ fn export_formatting() {
 }
 
 #[test]
+fn append_to_nonexistent_returns_error() {
+    let (store, _dir) = temp_store();
+    let result = store.append_message(
+        "nonexistent-id",
+        Message {
+            role: Role::User,
+            content: "test".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            citations: vec![],
+        },
+    );
+    assert!(result.is_err(), "appending to nonexistent conversation should error");
+}
+
+#[test]
+fn list_all_across_courses() {
+    let (store, _dir) = temp_store();
+    store.create_conversation("bio101", "Chat 1").unwrap();
+    store.create_conversation("chem201", "Chat 2").unwrap();
+    store.create_conversation("phys301", "Chat 3").unwrap();
+
+    let all = store.list_all().unwrap();
+    assert_eq!(all.len(), 3);
+
+    let courses: Vec<&str> = all.iter().map(|s| s.course_id.as_str()).collect();
+    assert!(courses.contains(&"bio101"));
+    assert!(courses.contains(&"chem201"));
+    assert!(courses.contains(&"phys301"));
+}
+
+#[test]
 fn summary_has_correct_message_count() {
     let (store, _dir) = temp_store();
     let conv = store.create_conversation("bio101", "Test").unwrap();

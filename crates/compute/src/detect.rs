@@ -62,14 +62,33 @@ mod tests {
     #[test]
     fn probe_does_not_panic() {
         let info = probe();
-        // Without features, should be CPU-only
         assert!(!info.backend.is_empty());
+        #[cfg(not(feature = "metal"))]
+        assert!(!info.has_metal);
+        #[cfg(not(feature = "cuda"))]
+        assert!(!info.has_cuda);
     }
 
     #[test]
     fn best_gpu_or_cpu_does_not_panic() {
         let device = best_gpu_or_cpu();
-        // Without features enabled, this will be CPU
         let _ = device;
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_metal_probe() {
+        let info = probe();
+        // On macOS with metal feature, Metal should be detected
+        assert!(info.has_metal, "Metal should be detected on macOS with metal feature");
+        assert_eq!(info.backend, "metal");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_cuda_probe() {
+        let info = probe();
+        assert!(info.has_cuda, "CUDA should be detected with cuda feature");
+        assert_eq!(info.backend, "cuda");
     }
 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::Device;
 use conversations::{Citation, Message};
-use db::VectorStore;
+use db::{InMemoryStore, VectorStore};
 use embeddings::EmbeddingModel;
 use lru::LruCache;
 use tracing::debug;
@@ -27,6 +27,7 @@ pub enum PreparedQuery {
 pub struct RagPipeline {
     embedder: EmbeddingModel,
     store: VectorStore,
+    memory_store: Option<InMemoryStore>,
     config: RagConfig,
     model_arch: ModelArch,
     query_cache: Mutex<LruCache<String, Arc<[f32]>>>,
@@ -45,9 +46,11 @@ impl RagPipeline {
         let store =
             VectorStore::open_or_create(database_dir, "chunks", embeddings::EMBEDDING_DIM).await?;
         store.create_index_if_needed(256).await;
+        let memory_store = InMemoryStore::from_store(&store).await.ok();
         Ok(Self {
             embedder,
             store,
+            memory_store,
             config,
             model_arch,
             query_cache: Mutex::new(LruCache::new(NonZeroUsize::new(128).unwrap())),
@@ -70,8 +73,14 @@ impl RagPipeline {
     }
 
     /// Search the vector store for relevant chunks.
+    ///
+    /// Uses the in-memory store for fast brute-force search when available,
+    /// falling back to LanceDB otherwise.
     pub async fn search_chunks(&self, query_vec: &[f32]) -> Result<Vec<db::SearchResult>> {
         let strategy = self.config.to_retrieval_strategy();
+        if let Some(mem) = &self.memory_store {
+            return Ok(mem.search(query_vec, &strategy));
+        }
         Ok(self.store.search(query_vec, &strategy).await?)
     }
 

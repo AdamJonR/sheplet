@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "sheplet_student"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sheplet-student"
 path = "src/main.rs"
@@ -27,6 +31,15 @@ anyhow.workspace = true
 thiserror.workspace = true
 hex.workspace = true
 dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+hyper = "1"
+tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = []

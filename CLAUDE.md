@@ -26,7 +26,7 @@ cargo build -p sheplet-student         # Build only the student binary
 
 ## Workspace Architecture
 
-Cargo workspace with 3 binaries and 7 library crates:
+Cargo workspace with 3 binaries and 9 library crates:
 
 ```
 bins/
@@ -42,6 +42,8 @@ crates/
   finetune              — LoRA fine-tuning (DPO + SFT) via Candle
   bundle                — Bundle compression (zstd) and signing (Ed25519)
   conversations         — Persistent conversation storage (sled)
+  compute               — Device selection and GPU feature flags (Metal/CUDA)
+  project               — Project manifest and config management
 ```
 
 ## Key Technical Decisions

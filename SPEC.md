@@ -1,4 +1,4 @@
-# Sheplet — Project Specification v1.7
+# Sheplet — Project Specification v1.8
 > A fully local, socioeconomically accessible RAG + fine-tuning platform for students and instructors, built entirely in Rust.
 
 ---
@@ -21,7 +21,7 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 - **Zero student setup** — students download two files and start chatting.
 - **Cross-platform** — both executables target Windows, macOS, and Linux.
 - **Accessible hardware** — designed for modest consumer hardware (e.g., 16GB RAM Intel laptops).
-- **Pure Rust throughout** — every component is Rust-native, including the student frontend via Leptos.
+- **Pure Rust throughout** — every component is Rust-native, including the student frontend via axum + HTML/CSS/JS.
 - **Instructor empowerment** — professors build ready-to-use course models without writing code.
 - **Academic integrity** — low-relevance queries are blocked rather than hallucinated.
 
@@ -52,7 +52,19 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 
 ---
 
-## 4. Default Model
+## 4. GPU Acceleration
+
+The `compute` crate provides workload-aware device selection with optional GPU support:
+
+- **Workload routing**: Inference and training tasks prefer GPU when available; embedding and quantization always run on CPU
+- **Feature flags**: `metal` (macOS GPU via Metal Performance Shaders), `cuda` (Linux/Windows GPU via CUDA)
+- **Fallback chain**: Metal → CUDA → CPU — the first available accelerator is selected automatically
+- **Default**: CPU-only in release builds; GPU support opt-in via Cargo feature flags
+- **CI**: Metal acceleration tested on macOS runners
+
+---
+
+## 5. Default Model & Embedding Model
 
 **Small Language Model**
 - Default: **Phi-4-mini-instruct** (3.8B parameters, Microsoft, MIT License)
@@ -60,8 +72,9 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 - LoRA fine-tuning layers on top of the instruct base, nudging behavior toward professor preferences while preserving underlying chat capabilities. The base instruct weights are frozen throughout training; only the small LoRA adapter matrices are trained.
 - Format: SafeTensors, downloaded via `hf-hub` during instructor bundle build
 - Default quantization: Q4_K_M (best balance of quality and memory for modest hardware)
-- Instructor-selectable quantization: Q4_K_M, Q8_0, Q4_0
+- Instructor-selectable quantization: Q4_K_M, Q5_K_M, Q8_0, Q4_0
 - Context window: 128K tokens
+- Architecture auto-detected from `config.json` `model_type` field
 
 **Embedding Model**
 - Default: all-MiniLM-L6-v2 in SafeTensors format, run via Candle
@@ -69,7 +82,20 @@ Everything runs locally. No API keys, no cloud services, no Python environment, 
 
 ---
 
-## 5. The Executables
+## 6. Supported Models
+
+| Model | Parameters | License | Quantization | Notes |
+|---|---|---|---|---|
+| Phi-4-mini-instruct (default) | 3.8B | MIT | Q4_K_M, Q5_K_M, Q8_0, Q4_0 | Open, instruct-tuned |
+| Gemma-3-1B-IT | 1B | Gemma license | None (BF16 SafeTensors) | Gated (requires `HF_TOKEN`) |
+
+- Architecture auto-detected from `config.json` `model_type` field (`phi3` or `gemma3`)
+- Gemma uses full BF16 SafeTensors — no GGUF quantization is applied
+- Gemma is a gated model on Hugging Face; instructors must set `HF_TOKEN` before downloading
+
+---
+
+## 7. The Executables
 
 ### sheplet-instructor (CLI)
 A CLI tool for professors. Runs on the professor's machine. Used to:
@@ -99,7 +125,7 @@ A self-contained desktop client for students. Runs on the student's machine. Use
 
 ---
 
-## 6. The .sheplet Bundle
+## 8. The .sheplet Bundle
 
 The `.sheplet` bundle is a single fully self-contained compressed archive, generated and cryptographically signed by `sheplet-instructor`. It contains everything the student needs — no internet required after download.
 
@@ -144,7 +170,7 @@ Defined in `config.json` by the professor:
 
 ---
 
-## 7. Bundle Signing & Verification
+## 9. Bundle Signing & Verification
 
 Sheplet uses Ed25519 asymmetric cryptography (`ed25519-dalek`) to sign bundles at build time and verify them at load time.
 
@@ -161,7 +187,7 @@ Sheplet uses Ed25519 asymmetric cryptography (`ed25519-dalek`) to sign bundles a
 
 ---
 
-## 8. sheplet-instructor CLI Workflow
+## 10. sheplet-instructor CLI Workflow
 
 ### Step 1 — Initialize a course project
 ```bash
@@ -191,10 +217,13 @@ sheplet-instructor ingest --sources ./sources/ --project ./bio101
 ### Step 4 — Download and quantize the model
 ```bash
 sheplet-instructor model --name phi-4-mini-instruct --quantization q4_k_m --project ./bio101
+# or, for Gemma:
+sheplet-instructor model --name gemma-3-1b-it --project ./bio101
 ```
-- Downloads Phi-4-mini-instruct SafeTensors from Hugging Face Hub via `hf-hub`
-- Applies selected quantization via Candle
-- Saves quantized weights to `./bio101/model/`
+- Downloads model SafeTensors from Hugging Face Hub via `hf-hub`
+- For Phi: applies selected quantization (Q4_K_M, Q5_K_M, Q8_0, Q4_0) via Candle
+- For Gemma: skips quantization (uses BF16 SafeTensors directly); requires `HF_TOKEN` (gated model)
+- Saves weights to `./bio101/model/`
 
 ### Step 5 — Fine-tune with LoRA
 ```bash
@@ -232,7 +261,7 @@ sheplet-instructor bundle --project ./bio101 --output ./bio101_v2.sheplet --bump
 
 ---
 
-## 9. Document Ingestion Details
+## 11. Document Ingestion Details
 
 **Supported Formats:** PDF (.pdf), Word (.docx), Excel (.xlsx), CSV (.csv), Plain text (.txt)
 
@@ -247,7 +276,7 @@ sheplet-instructor bundle --project ./bio101 --output ./bio101_v2.sheplet --bump
 
 ---
 
-## 10. Fine-Tuning Data Templates
+## 12. Fine-Tuning Data Templates
 
 **dpo_template.jsonl**
 ```json
@@ -261,7 +290,7 @@ sheplet-instructor bundle --project ./bio101 --output ./bio101_v2.sheplet --bump
 
 ---
 
-## 11. sheplet-student Chat Interface & RAG Pipeline
+## 13. sheplet-student Chat Interface & RAG Pipeline
 
 ### First Launch
 1. Student launches `sheplet-student`
@@ -280,10 +309,10 @@ The model does not fall back to its own training knowledge. This protects academ
 ### RAG Loop (when threshold is met)
 1. Student submits a question
 2. Question embedded via Candle (all-MiniLM-L6-v2 from bundle)
-3. Top-K or MMR chunks retrieved from bundled LanceDB
+3. On bundle load, vectors are loaded into an in-memory store (`InMemoryStore`) for fast brute-force search, bypassing LanceDB I/O on each query. Top-K or MMR chunks retrieved from this in-memory store.
 4. Relevance scores checked — if below threshold, query blocked
 5. Prompt assembled: system prompt + chunks + conversation history + question
-6. Phi-4-mini-instruct generates response
+6. Model generates response (Phi-4-mini-instruct or Gemma-3-1B-IT, depending on bundle)
 7. Response shown with collapsible source citations
 
 **Prompt Structure**
@@ -293,6 +322,10 @@ The model does not fall back to its own training knowledge. This protects academ
 [CONVERSATION HISTORY — rolling window]
 [STUDENT QUESTION]
 ```
+
+**Prompt Formats** (auto-selected by model architecture):
+- **Phi-3/4**: `<|system|>...<|end|>\n<|user|>...<|end|>\n<|assistant|>`
+- **Gemma-3**: `<start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model` (system prompt folded into first user turn)
 
 ### Conversation Persistence
 - All conversations saved locally via `sled` embedded key-value store
@@ -307,7 +340,7 @@ The model does not fall back to its own training knowledge. This protects academ
 
 ---
 
-## 12. Fine-Tuning Details
+## 14. Fine-Tuning Details
 
 **Why LoRA on an Instruct Model Works:** Phi-4-mini-instruct already understands conversation. LoRA adds small trainable rank decomposition matrices that shift behavior toward professor preferences. The instruct base is frozen. Professors need far less training data than starting from a base model.
 
@@ -316,11 +349,13 @@ The model does not fall back to its own training knowledge. This protects academ
 - **SFT** — example input-output pairs; simpler; good starting point
 - Both available and combinable in sequence
 
+**Supported Architectures:** LoRA supports both Phi-3/4 and Gemma-3. Phi-3 uses a fused `qkv_proj` weight matrix; Gemma-3 uses separate `q_proj`/`k_proj`/`v_proj`/`o_proj` projections, `GemmaRmsNorm` (1 + weight scaling), and a tied `lm_head`. The LoRA implementation handles these differences transparently.
+
 **Hardware Pre-flight:** Detects available RAM, estimates training time, requires professor confirmation before proceeding. Recommended minimum: 16GB RAM.
 
 ---
 
-## 13. Application Architecture
+## 15. Application Architecture
 
 ### sheplet-instructor (CLI)
 ```
@@ -351,7 +386,7 @@ sheplet-instructor
 │  ┌──────────────────────────────────────────┐   │
 │  │  Library Crates (same as CLI)            │   │
 │  │  parser | embeddings | db | rag          │   │
-│  │  finetune | bundle                       │   │
+│  │  finetune | bundle | compute | project   │   │
 │  └──────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────┘
 ```
@@ -372,11 +407,12 @@ sheplet-instructor
 │  └────────┬────────┘  │   extract (zstd)     │   │
 │           │           └──────────────────────┘   │
 │  ┌────────▼────────┐  ┌──────────────────────┐   │
-│  │    LanceDB      │  │  Conversation Store  │   │
-│  │  (per course)   │  │  (sled)              │   │
+│  │  InMemoryStore  │  │  Conversation Store  │   │
+│  │  + LanceDB      │  │  (sled)              │   │
+│  │  (per course)   │  │                      │   │
 │  └─────────────────┘  └──────────────────────┘   │
 │  ┌────────────────────────────────────────────┐  │
-│  │  Phi-4-mini-instruct (quantized)           │  │
+│  │  SLM (Phi-4 or Gemma-3, from bundle)      │  │
 │  │  all-MiniLM-L6-v2 | adapter.lora           │  │
 │  │  (all sourced from active bundle)          │  │
 │  └────────────────────────────────────────────┘  │
@@ -385,7 +421,7 @@ sheplet-instructor
 
 ---
 
-## 14. Project Directory Structure (Instructor Machine)
+## 16. Project Directory Structure (Instructor Machine)
 ```
 bio101/
   manifest.json
@@ -407,7 +443,7 @@ bio101_v1.sheplet           ← signed distributable bundle
 
 ---
 
-## 15. Student File Layout
+## 17. Student File Layout
 ```
 sheplet-student/
   sheplet-student.exe
@@ -428,7 +464,7 @@ sheplet-student/
 
 ---
 
-## 16. Distribution
+## 18. Distribution
 
 ### sheplet-instructor / sheplet-instructor-web
 - Downloaded by professors from the Sheplet project website
@@ -449,28 +485,39 @@ sheplet-student/
 
 ---
 
-## 17. Open Source Considerations
+## 19. Open Source Considerations
 
 To be decided. Recommended: open source core (MIT or Apache 2.0) with official signed builds via the project website. Community can audit and contribute; malicious forks remain clearly distinguishable.
 
 ---
 
-## 18. Known Limitations (v1.0)
+## 20. Known Limitations (v1.0)
 
 - Bundle size ~2.7–3GB — professors should verify LMS upload limits
 - PDF parsing may degrade on scanned or complex layout PDFs
-- CPU-only inference in v1.0
+- CPU inference by default; Metal (macOS) and CUDA (Linux/Windows) available via feature flags but not compiled in release builds
 - No automatic bundle update mechanism
 - No image or audio document support
 
 ---
 
-## 19. Full Rust Crate Reference
+## 21. Performance Testing
+
+Criterion benchmarks cover the student hot path:
+
+- **Vector search**: `cargo bench -p db --bench search` — measures brute-force and LanceDB query latency
+- **Prompt assembly**: `cargo bench -p rag --bench prompt` — measures RAG prompt construction
+- **Embedding**: `cargo bench -p embeddings --bench embed` — gated on `SHEPLET_BENCH_MODELS_DIR` (requires model weights)
+- CI smoke-runs benchmarks on every push to detect regressions
+
+---
+
+## 22. Full Rust Crate Reference
 
 | Crate | Used In | Purpose | Pure Rust |
 |---|---|---|---|
 | `candle-core` | Both | Tensor ops, model inference | ✅ |
-| `candle-transformers` | Both | Phi-4-mini-instruct architecture | ✅ |
+| `candle-transformers` | Both | Phi-4 and Gemma-3 model architectures | ✅ |
 | Manual LoRA (`candle-core`/`candle-nn`) | Instructor | LoRA fine-tuning (DPO + SFT) | ✅ |
 | `lancedb` | Both | Vector database | ✅ |
 | `text-splitter` | Instructor | Semantic + token-aware chunking | ✅ |
@@ -488,5 +535,8 @@ To be decided. Recommended: open source core (MIT or Apache 2.0) with official s
 | `hf-hub` | Instructor | Hugging Face model downloading | ✅ |
 | `tokio` | Both | Async runtime | ✅ |
 | `serde` / `serde_json` | Both | Serialization | ✅ |
+| `compute` (workspace crate) | Both | Device selection, GPU feature flags (Metal/CUDA) | ✅ |
+| `project` (workspace crate) | Instructor | Project manifest and config management | ✅ |
+| `criterion` | Dev only | Performance benchmarking (student hot path) | ✅ |
 
 ---

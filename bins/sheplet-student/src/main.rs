@@ -1,8 +1,3 @@
-mod app_state;
-mod course;
-mod handlers;
-mod server;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,8 +5,9 @@ use anyhow::Result;
 use conversations::ConversationStore;
 use tokio::sync::RwLock;
 
-use app_state::AppState;
-use course::CourseManager;
+use sheplet_student::app_state::AppState;
+use sheplet_student::course::CourseManager;
+use sheplet_student::server;
 
 const DEFAULT_PORT: u16 = 8420;
 

@@ -93,6 +93,8 @@ struct LoraAttention {
     k_proj: LoraLinear,
     v_proj: LoraLinear,
     o_proj: LoraLinear,
+    q_norm: GemmaRmsNorm,
+    k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -135,11 +137,16 @@ impl LoraAttention {
             LoraLinear::new(o_frozen, num_heads * head_dim, hidden_size, lora_cfg, device)
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
+            q_norm,
+            k_norm,
             rotary_emb,
             kv_cache: None,
             num_heads,
@@ -182,6 +189,10 @@ impl LoraAttention {
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
+
+        // Apply QK-normalization before rotary embedding
+        let query_states = self.q_norm.forward(&query_states)?;
+        let key_states = self.k_norm.forward(&key_states)?;
 
         let (query_states, key_states) =
             self.rotary_emb
@@ -336,7 +347,6 @@ pub struct Gemma3LoraModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
-    lm_head: candle_nn::Linear,
     device: Device,
     dtype: DType,
     hidden_size: usize,
@@ -368,12 +378,10 @@ impl Gemma3LoraModel {
             layers.push(layer);
         }
         let norm = GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head,
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
@@ -441,9 +449,9 @@ impl Gemma3LoraModel {
             Some(pos) => xs.narrow(1, pos, seq_len - pos)?,
             None => xs.narrow(1, seq_len - 1, 1)?,
         };
-        // Tied lm_head: reuse embed_tokens weight via Linear (handles 3D batch tensors)
+        // Tied lm_head: reuse embed_tokens weight (use broadcast_matmul for 3D×2D support)
         let logits = xs.apply(&self.norm)?
-            .apply(&self.lm_head)?;
+            .broadcast_matmul(&self.embed_tokens.embeddings().t()?)?;
         let logits = match self.final_logit_softcapping {
             None => logits,
             Some(sc) => ((logits / sc)?.tanh()? * sc)?,
@@ -643,6 +651,145 @@ mod tests {
         assert_eq!(config.num_hidden_layers, 26);
         assert_eq!(config.vocab_size, 262144);
         assert_eq!(config.hidden_size, 1152);
+    }
+
+    #[test]
+    fn test_gemma3_attention_with_qk_norm() {
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        let hidden_size = 8usize;
+        let num_heads = 2usize;
+        let num_kv_heads = 1usize;
+        let head_dim = 4usize;
+
+        let cfg = Gemma3Config {
+            vocab_size: 32,
+            hidden_size,
+            intermediate_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: num_heads,
+            num_key_value_heads: num_kv_heads,
+            head_dim,
+            hidden_activation: candle_nn::Activation::GeluPytorchTanh,
+            rms_norm_eps: 1e-6,
+            rope_theta: 10000.0,
+            attention_bias: false,
+            final_logit_softcapping: None,
+            attn_logit_softcapping: None,
+            query_pre_attn_scalar: head_dim,
+            max_position_embeddings: 128,
+        };
+
+        let lora_cfg = LoraConfig {
+            rank: 2,
+            alpha: 4.0,
+            dropout: 0.0,
+        };
+        let rotary_emb = Arc::new(
+            RotaryEmbedding::new(dtype, head_dim, 128, 10000.0, &device).unwrap(),
+        );
+
+        // Deterministic input with seq_len=2 so attention distribution matters
+        let input = Tensor::from_vec(
+            (1..=16).map(|i| i as f32 * 0.1).collect::<Vec<_>>(),
+            &[1, 2, hidden_size],
+            &device,
+        )
+        .unwrap();
+
+        // Causal mask for seq_len=2
+        let mask = Tensor::from_vec(
+            vec![0.0f32, f32::NEG_INFINITY, 0.0, 0.0],
+            &[1, 1, 2, 2],
+            &device,
+        )
+        .unwrap();
+
+        // Fixed projection weights
+        let q_w = Tensor::from_vec(
+            (0..num_heads * head_dim * hidden_size)
+                .map(|i| (i as f32 * 0.01) % 1.0)
+                .collect::<Vec<_>>(),
+            &[num_heads * head_dim, hidden_size],
+            &device,
+        )
+        .unwrap();
+        let k_w = Tensor::from_vec(
+            (0..num_kv_heads * head_dim * hidden_size)
+                .map(|i| (i as f32 * 0.02) % 1.0)
+                .collect::<Vec<_>>(),
+            &[num_kv_heads * head_dim, hidden_size],
+            &device,
+        )
+        .unwrap();
+        let v_w = Tensor::from_vec(
+            (0..num_kv_heads * head_dim * hidden_size)
+                .map(|i| (i as f32 * 0.03) % 1.0)
+                .collect::<Vec<_>>(),
+            &[num_kv_heads * head_dim, hidden_size],
+            &device,
+        )
+        .unwrap();
+        let o_w = Tensor::from_vec(
+            (0..hidden_size * num_heads * head_dim)
+                .map(|i| (i as f32 * 0.04) % 1.0)
+                .collect::<Vec<_>>(),
+            &[hidden_size, num_heads * head_dim],
+            &device,
+        )
+        .unwrap();
+
+        // Build attention with different q_norm/k_norm weights to prove norm is applied
+        let build_attn = |norm_val: f32| -> LoraAttention {
+            let mut tensors = HashMap::new();
+            tensors.insert("q_proj.weight".to_string(), q_w.clone());
+            tensors.insert("k_proj.weight".to_string(), k_w.clone());
+            tensors.insert("v_proj.weight".to_string(), v_w.clone());
+            tensors.insert("o_proj.weight".to_string(), o_w.clone());
+            tensors.insert(
+                "q_norm.weight".to_string(),
+                Tensor::from_vec(vec![norm_val; head_dim], head_dim, &device).unwrap(),
+            );
+            tensors.insert(
+                "k_norm.weight".to_string(),
+                Tensor::from_vec(vec![norm_val; head_dim], head_dim, &device).unwrap(),
+            );
+            let vb = VarBuilder::from_tensors(tensors, dtype, &device);
+            LoraAttention::new(rotary_emb.clone(), &cfg, &lora_cfg, vb, &device).unwrap()
+        };
+
+        // norm weight=0 → GemmaRmsNorm scale = (0+1) = 1x
+        let mut attn1 = build_attn(0.0);
+        let out1 = attn1.forward(&input, Some(&mask), 0, false).unwrap();
+
+        // norm weight=9 → GemmaRmsNorm scale = (9+1) = 10x
+        let mut attn2 = build_attn(9.0);
+        let out2 = attn2.forward(&input, Some(&mask), 0, false).unwrap();
+
+        // Verify shapes
+        assert_eq!(out1.dims(), &[1, 2, hidden_size]);
+        assert_eq!(out2.dims(), &[1, 2, hidden_size]);
+
+        // Outputs should differ (QK-norm weights affect attention distribution)
+        let diff = (&out1 - &out2)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(
+            diff > 1e-4,
+            "different QK-norm weights should produce different outputs, diff={diff}"
+        );
+
+        // Both should be finite
+        let vals1: Vec<f32> = out1.flatten_all().unwrap().to_vec1().unwrap();
+        let vals2: Vec<f32> = out2.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(vals1.iter().all(|v| v.is_finite()), "output1 should be finite");
+        assert!(vals2.iter().all(|v| v.is_finite()), "output2 should be finite");
     }
 
     #[test]

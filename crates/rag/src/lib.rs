@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod gemma3;
 pub mod inference;
 pub mod pipeline;
 pub mod prompt;

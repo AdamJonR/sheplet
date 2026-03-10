@@ -20,6 +20,7 @@ use crate::handlers::bundles::ErrorResponse;
 pub struct ChatRequest {
     message: String,
     conversation_id: Option<String>,
+    max_tokens: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -192,8 +193,9 @@ async fn chat_sync(
             }))
         }
         PreparedQuery::Ready { prompt, citations } => {
+            let max_tokens = req.max_tokens.unwrap_or(512);
             let mut generator = active.generator.lock().unwrap();
-            let response = generator.generate(&prompt, 512).map_err(|e| {
+            let response = generator.generate(&prompt, max_tokens).map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
@@ -353,10 +355,11 @@ async fn chat_stream(
 
                 // Generate tokens
                 let (token_tx, token_rx) = std::sync::mpsc::channel::<rag::Result<String>>();
+                let max_tokens = req.max_tokens.unwrap_or(512);
                 let gen_clone = generator.clone();
                 tokio::task::spawn_blocking(move || {
                     let mut locked = gen_clone.lock().unwrap();
-                    let _ = locked.generate_to_sender(&prompt, 512, token_tx);
+                    let _ = locked.generate_to_sender(&prompt, max_tokens, token_tx);
                 });
 
                 let mut full_response = String::new();

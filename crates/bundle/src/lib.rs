@@ -141,6 +141,28 @@ mod tests {
     }
 
     #[test]
+    fn untrusted_key_error() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let kp_a = Keypair::generate();
+        setup_project_dir(&project_dir, &kp_a);
+
+        let bundle_path = tmp.path().join("test.sheplet");
+        pack(&project_dir, &bundle_path, &kp_a).unwrap();
+
+        let extract_dir = tmp.path().join("extracted");
+        let kp_b = Keypair::generate();
+        let result = verify_and_unpack(&bundle_path, &extract_dir, &kp_b.fingerprint());
+        assert!(
+            matches!(result, Err(BundleError::UntrustedKey { .. })),
+            "expected UntrustedKey error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn missing_manifest_error() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path().join("project");
@@ -153,6 +175,43 @@ mod tests {
         let bundle_path = tmp.path().join("test.sheplet");
         let result = pack(&project_dir, &bundle_path, &kp);
         assert!(matches!(result, Err(BundleError::MissingEntry(ref s)) if s == "manifest.json"));
+    }
+
+    #[test]
+    fn manifest_serialization_roundtrip() {
+        let kp = Keypair::generate();
+        let manifest = make_test_manifest(&kp);
+        let json = serde_json::to_string(&manifest).unwrap();
+        let loaded: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.version, manifest.version);
+        assert_eq!(loaded.course_name, manifest.course_name);
+        assert_eq!(loaded.model_name, manifest.model_name);
+        assert_eq!(loaded.quantization, manifest.quantization);
+        assert_eq!(loaded.public_key_hex, manifest.public_key_hex);
+        assert_eq!(loaded.public_key_fingerprint, manifest.public_key_fingerprint);
+    }
+
+    #[test]
+    fn pack_with_empty_model_dir() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let kp = Keypair::generate();
+        let manifest = make_test_manifest(&kp);
+        fs::write(
+            project_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(project_dir.join("config.json"), "{}").unwrap();
+        // Create model dir but leave it empty
+        fs::create_dir_all(project_dir.join("model")).unwrap();
+
+        let bundle_path = tmp.path().join("test.sheplet");
+        // Should succeed — empty model dir is just an empty directory in the archive
+        let result = pack(&project_dir, &bundle_path, &kp);
+        assert!(result.is_ok(), "packing with empty model dir should work: {:?}", result.err());
     }
 
     #[test]

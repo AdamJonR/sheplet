@@ -193,3 +193,119 @@ impl LoraModel {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_fixtures::{make_test_lora, tensor_abs_diff};
+    use candle_core::Tensor;
+
+    #[test]
+    fn test_lora_linear_init_shapes() {
+        let lora = make_test_lora(8, 16, 4, 16.0);
+        assert_eq!(lora.lora_a().dims(), &[4, 8]); // [rank, in_features]
+        assert_eq!(lora.lora_b().dims(), &[16, 4]); // [out_features, rank]
+    }
+
+    #[test]
+    fn test_lora_linear_forward_dtype_preserved() {
+        let lora = make_test_lora(8, 16, 4, 16.0);
+        let x = Tensor::rand(0.0f32, 1.0f32, &[3, 8], &Device::Cpu).unwrap();
+        assert_eq!(x.dtype(), DType::F32);
+        let out = lora.forward(&x).unwrap();
+        assert_eq!(out.dtype(), DType::F32, "F32 input must produce F32 output");
+    }
+
+    #[test]
+    fn test_lora_b_initialized_to_zero() {
+        let lora = make_test_lora(8, 16, 4, 16.0);
+        let sum = lora
+            .lora_b()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert_eq!(sum, 0.0, "lora_b must be initialized to all zeros");
+    }
+
+    #[test]
+    fn test_lora_forward_equals_frozen_at_init() {
+        let lora = make_test_lora(8, 16, 4, 16.0);
+        let x = Tensor::rand(0.0f32, 1.0f32, &[3, 8], &Device::Cpu).unwrap();
+        let full_out = lora.forward(&x).unwrap();
+        let frozen_out = lora.forward_frozen_only(&x).unwrap();
+        let diff = tensor_abs_diff(&full_out, &frozen_out);
+        assert!(
+            diff < 1e-6,
+            "with B=0, forward should equal forward_frozen_only, diff={diff}"
+        );
+    }
+
+    #[test]
+    fn test_lora_scale_computation() {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros(&[16, 8], DType::F32, &device).unwrap();
+        let frozen = Linear::new(weight, None);
+        let config = LoraConfig {
+            rank: 4,
+            alpha: 32.0,
+            dropout: 0.0,
+        };
+        let lora = LoraLinear::new(frozen, 8, 16, &config, &device).unwrap();
+        assert!((lora.scale() - 8.0).abs() < 1e-10, "scale should be alpha/rank = 32/4 = 8");
+    }
+
+    #[test]
+    fn test_lora_3d_forward_shape() {
+        let lora = make_test_lora(8, 16, 4, 16.0);
+        let x = Tensor::rand(0.0f32, 1.0f32, &[2, 5, 8], &Device::Cpu).unwrap();
+        let out = lora.forward(&x).unwrap();
+        assert_eq!(out.dims(), &[2, 5, 16]);
+    }
+
+    #[test]
+    fn test_lora_save_load_roundtrip_preserves_dtype() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("adapter.safetensors");
+
+        let mut lora = make_test_lora(8, 16, 4, 16.0);
+        // Set lora_a to non-zero to have something meaningful
+        let new_a = Tensor::rand(0.0f32, 1.0f32, &[4, 8], &Device::Cpu).unwrap();
+        lora.set_lora_a(new_a.clone());
+        lora.save(&path).unwrap();
+
+        lora.load(&path, &Device::Cpu).unwrap();
+        assert_eq!(lora.lora_a().dtype(), DType::F32);
+        assert_eq!(lora.lora_b().dtype(), DType::F32);
+        assert!(tensor_abs_diff(&new_a, lora.lora_a()) < 1e-6, "weights should survive save/load roundtrip");
+    }
+
+    #[test]
+    fn test_lora_model_trainable_tensors_count() {
+        let device = Device::Cpu;
+        let config = LoraConfig {
+            rank: 4,
+            alpha: 16.0,
+            dropout: 0.0,
+        };
+        let mut model = LoraModel::new(config);
+
+        let n_layers = 3;
+        for i in 0..n_layers {
+            let weight = Tensor::rand(0.0f32, 1.0f32, &[16, 8], &device).unwrap();
+            let frozen = Linear::new(weight, None);
+            model
+                .add_layer(format!("layer_{i}"), frozen, 8, 16, &device)
+                .unwrap();
+        }
+
+        let tensors = model.trainable_tensors();
+        assert_eq!(
+            tensors.len(),
+            n_layers * 2,
+            "each layer contributes lora_a + lora_b"
+        );
+    }
+}
