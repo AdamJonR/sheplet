@@ -517,6 +517,38 @@ impl model_utils::LoraTrainable for Phi3LoraTrainer {
     fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {
         self.model.save_adapter(path)
     }
+
+    fn lora_tensors(&self) -> Vec<Tensor> {
+        let mut tensors = Vec::with_capacity(self.model.layers.len() * 4);
+        for layer in &self.model.layers {
+            let attn = &layer.self_attn;
+            // 4 tensors per layer: qkv_a, qkv_b, o_a, o_b
+            for proj in [&attn.qkv_proj, &attn.o_proj] {
+                tensors.push(proj.lora_a().clone());
+                tensors.push(proj.lora_b().clone());
+            }
+        }
+        tensors
+    }
+
+    fn set_lora_tensors(&mut self, tensors: &[Tensor]) {
+        debug_assert_eq!(
+            tensors.len(),
+            self.model.layers.len() * 4,
+            "expected {} tensors, got {}",
+            self.model.layers.len() * 4,
+            tensors.len()
+        );
+        let mut idx = 0;
+        for layer in &mut self.model.layers {
+            let attn = &mut layer.self_attn;
+            for proj in [&mut attn.qkv_proj, &mut attn.o_proj] {
+                proj.set_lora_a(tensors[idx].clone());
+                proj.set_lora_b(tensors[idx + 1].clone());
+                idx += 2;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

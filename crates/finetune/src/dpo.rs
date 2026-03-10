@@ -156,21 +156,14 @@ pub fn train_dpo(
             let log_ref_rejected =
                 gather_log_probs(&ref_resp_rejected, &rejected_targets, device)?;
 
-            // DPO loss: -log(sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))))
-            let chosen_reward = (log_pi_chosen - log_ref_chosen)?;
-            let rejected_reward = (log_pi_rejected - log_ref_rejected)?;
-            let diff = (chosen_reward - rejected_reward)?;
-            let scaled = (diff * config.beta)?;
-
-            // -log(sigmoid(x)) = log(1 + exp(-x))
-            let neg_scaled = scaled.neg()?;
-            let one = neg_scaled.ones_like()?;
-            let loss = (one + neg_scaled.exp()?)?.log()?;
+            let loss = dpo_loss(
+                log_pi_chosen, log_ref_chosen, log_pi_rejected, log_ref_rejected, config.beta,
+            )?;
 
             sgd.backward_step(&loss)
                 .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
 
-            final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+            final_loss = loss.to_scalar::<f32>()? as f64;
         }
 
         lora.set_lora_a(var_a.as_tensor().clone());
@@ -178,6 +171,24 @@ pub fn train_dpo(
     }
 
     Ok(final_loss)
+}
+
+/// Compute DPO loss: -log(sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))))
+/// Equivalent to log(1 + exp(-beta * reward_diff)).
+fn dpo_loss(
+    log_pi_chosen: Tensor,
+    log_ref_chosen: Tensor,
+    log_pi_rejected: Tensor,
+    log_ref_rejected: Tensor,
+    beta: f64,
+) -> Result<Tensor, FinetuneError> {
+    let chosen_reward = (log_pi_chosen - log_ref_chosen)?;
+    let rejected_reward = (log_pi_rejected - log_ref_rejected)?;
+    let diff = (chosen_reward - rejected_reward)?;
+    let scaled = (diff * beta)?;
+    let neg_scaled = scaled.neg()?;
+    let one = neg_scaled.ones_like()?;
+    Ok((one + neg_scaled.exp()?)?.log()?)
 }
 
 /// Compute sum of log-probabilities for target tokens from logits.
@@ -219,6 +230,20 @@ pub fn train_dpo_full(
     let mut final_loss = 0.0;
 
     for _epoch in 0..config.epochs {
+        // Create Vars from LoRA tensors for gradient tracking
+        let lora_tensors = trainer.lora_tensors();
+        let vars: Vec<Var> = lora_tensors
+            .iter()
+            .map(|t| Var::from_tensor(t))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+
+        // Set var-backed tensors into model so forward passes use tracked tensors
+        let var_tensors: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
+        trainer.set_lora_tensors(&var_tensors);
+
+        let mut sgd = SGD::new(vars.clone(), config.learning_rate)
+            .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
+
         for example in data {
             // Tokenize prompt+chosen and prompt+rejected
             let chosen_text = format!("{}{}", example.prompt, example.chosen);
@@ -297,18 +322,18 @@ pub fn train_dpo_full(
             let log_ref_rejected =
                 gather_log_probs(&ref_resp_rejected, &rejected_targets, &device)?;
 
-            // DPO loss: -log(sigmoid(beta * ((pi_c - ref_c) - (pi_r - ref_r))))
-            let chosen_reward = (log_pi_chosen - log_ref_chosen)?;
-            let rejected_reward = (log_pi_rejected - log_ref_rejected)?;
-            let diff = (chosen_reward - rejected_reward)?;
-            let scaled = (diff * config.beta)?;
+            let loss = dpo_loss(
+                log_pi_chosen, log_ref_chosen, log_pi_rejected, log_ref_rejected, config.beta,
+            )?;
 
-            // -log(sigmoid(x)) = log(1 + exp(-x))
-            let neg_scaled = scaled.neg()?;
-            let one = neg_scaled.ones_like()?;
-            let loss = (one + neg_scaled.exp()?)?.log()?;
+            sgd.backward_step(&loss)
+                .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
 
-            final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+            // Propagate updated tensors back into the model for next forward pass
+            let updated: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
+            trainer.set_lora_tensors(&updated);
+
+            final_loss = loss.to_scalar::<f32>()? as f64;
         }
     }
 
@@ -318,36 +343,10 @@ pub fn train_dpo_full(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lora::LoraConfig;
-    use candle_core::Tensor;
-    use candle_nn::Linear;
+    use crate::test_fixtures::{make_test_lora, tensor_abs_diff, DummyTokenizer};
 
-    struct DummyTokenizer;
-    impl Tokenize for DummyTokenizer {
-        fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
-            Ok(text
-                .split_whitespace()
-                .enumerate()
-                .map(|(i, _)| (i % 4) as u32)
-                .collect())
-        }
-    }
-
-    #[test]
-    fn test_dpo_smoke() {
-        let device = Device::Cpu;
-        let weight = Tensor::rand(0.0f32, 1.0f32, &[4, 4], &device).unwrap();
-        let frozen = Linear::new(weight, None);
-        let config = LoraConfig {
-            rank: 2,
-            alpha: 4.0,
-            dropout: 0.0,
-        };
-        let mut lora = LoraLinear::new(frozen, 4, 4, &config, &device).unwrap();
-
-        let orig_a = lora.lora_a().clone();
-
-        let data = vec![
+    fn dpo_data() -> Vec<DpoExample> {
+        vec![
             DpoExample {
                 prompt: "question one".into(),
                 chosen: "good answer here".into(),
@@ -358,7 +357,14 @@ mod tests {
                 chosen: "correct response".into(),
                 rejected: "wrong response".into(),
             },
-        ];
+        ]
+    }
+
+    #[test]
+    fn test_dpo_smoke() {
+        let device = Device::Cpu;
+        let mut lora = make_test_lora(4, 4, 2, 4.0);
+        let orig_a = lora.lora_a().clone();
 
         let dpo_config = DpoConfig {
             beta: 0.1,
@@ -367,18 +373,69 @@ mod tests {
             max_seq_len: 32,
         };
 
-        let loss = train_dpo(&mut lora, &data, &dpo_config, &DummyTokenizer, &device).unwrap();
+        let loss = train_dpo(&mut lora, &dpo_data(), &dpo_config, &DummyTokenizer, &device).unwrap();
         assert!(loss.is_finite(), "loss should be finite, got {loss}");
+        assert!(tensor_abs_diff(&orig_a, lora.lora_a()) > 0.0, "LoRA weights should have changed");
+    }
 
-        let diff = (orig_a - lora.lora_a())
-            .unwrap()
-            .abs()
-            .unwrap()
-            .sum_all()
-            .unwrap()
-            .to_scalar::<f32>()
-            .unwrap();
-        assert!(diff > 0.0, "LoRA weights should have changed");
+    #[test]
+    fn test_dpo_gradients_flow() {
+        // Verify that training produces finite loss and modifies weights at each epoch,
+        // confirming that gradients flow through the computation graph.
+        let device = Device::Cpu;
+        let mut lora = make_test_lora(4, 4, 2, 4.0);
+
+        let dpo_config = DpoConfig {
+            beta: 0.1,
+            learning_rate: 0.01,
+            epochs: 3,
+            max_seq_len: 32,
+        };
+
+        let a_before = lora.lora_a().clone();
+        let loss = train_dpo(&mut lora, &dpo_data(), &dpo_config, &DummyTokenizer, &device).unwrap();
+
+        assert!(loss.is_finite(), "DPO loss should be finite, got {loss}");
+        assert!(tensor_abs_diff(&a_before, lora.lora_a()) > 0.0, "weights should change over 3 epochs");
+    }
+
+    #[test]
+    fn test_dpo_both_lora_weights_change() {
+        let device = Device::Cpu;
+        let mut lora = make_test_lora(4, 4, 2, 4.0);
+        let orig_a = lora.lora_a().clone();
+        let orig_b = lora.lora_b().clone();
+
+        let dpo_config = DpoConfig {
+            beta: 0.1,
+            learning_rate: 0.01,
+            epochs: 3,
+            max_seq_len: 32,
+        };
+
+        train_dpo(&mut lora, &dpo_data()[..1].to_vec(), &dpo_config, &DummyTokenizer, &device).unwrap();
+
+        assert!(tensor_abs_diff(&orig_a, lora.lora_a()) > 0.0, "lora_a should change after training");
+        assert!(tensor_abs_diff(&orig_b, lora.lora_b()) > 0.0, "lora_b should change after training");
+    }
+
+    #[test]
+    fn test_dpo_loss_dtype_is_f32() {
+        let device = Device::Cpu;
+
+        let logits = Tensor::new(
+            &[[1.0f32, 2.0, 0.5, 0.1], [0.1, 3.0, 0.2, 0.5]],
+            &device,
+        )
+        .unwrap();
+        let targets = vec![1u32, 0];
+
+        let log_probs = gather_log_probs(&logits, &targets, &device).unwrap();
+        assert_eq!(
+            log_probs.dtype(),
+            DType::F32,
+            "log-prob result should be F32"
+        );
     }
 
     #[test]

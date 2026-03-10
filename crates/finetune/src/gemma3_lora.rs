@@ -336,7 +336,7 @@ pub struct Gemma3LoraModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
-    // lm_head reuses embed_tokens weight (tied embeddings)
+    lm_head: candle_nn::Linear,
     device: Device,
     dtype: DType,
     hidden_size: usize,
@@ -368,10 +368,12 @@ impl Gemma3LoraModel {
             layers.push(layer);
         }
         let norm = GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
             layers,
             norm,
+            lm_head,
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
@@ -439,9 +441,9 @@ impl Gemma3LoraModel {
             Some(pos) => xs.narrow(1, pos, seq_len - pos)?,
             None => xs.narrow(1, seq_len - 1, 1)?,
         };
-        // Tied lm_head: reuse embed_tokens weight
+        // Tied lm_head: reuse embed_tokens weight via Linear (handles 3D batch tensors)
         let logits = xs.apply(&self.norm)?
-            .matmul(&self.embed_tokens.embeddings().t()?)?;
+            .apply(&self.lm_head)?;
         let logits = match self.final_logit_softcapping {
             None => logits,
             Some(sc) => ((logits / sc)?.tanh()? * sc)?,
@@ -580,6 +582,38 @@ impl model_utils::LoraTrainable for Gemma3LoraTrainer {
 
     fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {
         self.model.save_adapter(path)
+    }
+
+    fn lora_tensors(&self) -> Vec<Tensor> {
+        let mut tensors = Vec::with_capacity(self.model.layers.len() * 8);
+        for layer in &self.model.layers {
+            let attn = &layer.self_attn;
+            // 8 tensors per layer: q_a, q_b, k_a, k_b, v_a, v_b, o_a, o_b
+            for proj in [&attn.q_proj, &attn.k_proj, &attn.v_proj, &attn.o_proj] {
+                tensors.push(proj.lora_a().clone());
+                tensors.push(proj.lora_b().clone());
+            }
+        }
+        tensors
+    }
+
+    fn set_lora_tensors(&mut self, tensors: &[Tensor]) {
+        debug_assert_eq!(
+            tensors.len(),
+            self.model.layers.len() * 8,
+            "expected {} tensors, got {}",
+            self.model.layers.len() * 8,
+            tensors.len()
+        );
+        let mut idx = 0;
+        for layer in &mut self.model.layers {
+            let attn = &mut layer.self_attn;
+            for proj in [&mut attn.q_proj, &mut attn.k_proj, &mut attn.v_proj, &mut attn.o_proj] {
+                proj.set_lora_a(tensors[idx].clone());
+                proj.set_lora_b(tensors[idx + 1].clone());
+                idx += 2;
+            }
+        }
     }
 }
 

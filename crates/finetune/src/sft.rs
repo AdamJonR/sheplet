@@ -130,7 +130,7 @@ pub fn train_sft(
             sgd.backward_step(&loss)
                 .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
 
-            final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+            final_loss = loss.to_scalar::<f32>()? as f64;
         }
 
         lora.set_lora_a(var_a.as_tensor().clone());
@@ -157,6 +157,20 @@ pub fn train_sft_full(
     let mut final_loss = 0.0;
 
     for _epoch in 0..config.epochs {
+        // Create Vars from LoRA tensors for gradient tracking
+        let lora_tensors = trainer.lora_tensors();
+        let vars: Vec<Var> = lora_tensors
+            .iter()
+            .map(|t| Var::from_tensor(t))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+
+        // Set var-backed tensors into model so forward passes use tracked tensors
+        let var_tensors: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
+        trainer.set_lora_tensors(&var_tensors);
+
+        let mut sgd = SGD::new(vars.clone(), config.learning_rate)
+            .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
+
         for example in data {
             trainer.clear_kv_cache();
 
@@ -192,7 +206,14 @@ pub fn train_sft_full(
             let loss = candle_nn::loss::cross_entropy(&logits, &target)
                 .map_err(|e| FinetuneError::Training(format!("loss: {e}")))?;
 
-            final_loss = loss.to_dtype(DType::F64)?.to_scalar::<f64>()?;
+            sgd.backward_step(&loss)
+                .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
+
+            // Propagate updated tensors back into the model for next forward pass
+            let updated: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
+            trainer.set_lora_tensors(&updated);
+
+            final_loss = loss.to_scalar::<f32>()? as f64;
         }
     }
 
@@ -202,37 +223,10 @@ pub fn train_sft_full(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lora::LoraConfig;
-    use candle_core::Tensor;
-    use candle_nn::Linear;
+    use crate::test_fixtures::{make_test_lora, tensor_abs_diff, DummyTokenizer};
 
-    struct DummyTokenizer;
-    impl Tokenize for DummyTokenizer {
-        fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
-            // Simple word-level tokenizer that produces valid token IDs
-            Ok(text
-                .split_whitespace()
-                .enumerate()
-                .map(|(i, _)| (i % 4) as u32)
-                .collect())
-        }
-    }
-
-    #[test]
-    fn test_sft_smoke() {
-        let device = Device::Cpu;
-        let weight = Tensor::rand(0.0f32, 1.0f32, &[4, 4], &device).unwrap();
-        let frozen = Linear::new(weight, None);
-        let config = LoraConfig {
-            rank: 2,
-            alpha: 4.0,
-            dropout: 0.0,
-        };
-        let mut lora = LoraLinear::new(frozen, 4, 4, &config, &device).unwrap();
-
-        let orig_a = lora.lora_a().clone();
-
-        let data = vec![
+    fn sft_data() -> Vec<SftExample> {
+        vec![
             SftExample {
                 input: "hello world".into(),
                 output: "foo bar".into(),
@@ -241,7 +235,14 @@ mod tests {
                 input: "foo".into(),
                 output: "bar baz".into(),
             },
-        ];
+        ]
+    }
+
+    #[test]
+    fn test_sft_smoke() {
+        let device = Device::Cpu;
+        let mut lora = make_test_lora(4, 4, 2, 4.0);
+        let orig_a = lora.lora_a().clone();
 
         let sft_config = SftConfig {
             learning_rate: 0.01,
@@ -250,31 +251,36 @@ mod tests {
             max_seq_len: 32,
         };
 
-        let loss = train_sft(&mut lora, &data, &sft_config, &DummyTokenizer, &device).unwrap();
+        let loss = train_sft(&mut lora, &sft_data(), &sft_config, &DummyTokenizer, &device).unwrap();
         assert!(loss.is_finite(), "loss should be finite, got {loss}");
+        assert!(tensor_abs_diff(&orig_a, lora.lora_a()) > 0.0, "LoRA weights should have changed");
+    }
 
-        let diff = (orig_a - lora.lora_a())
-            .unwrap()
-            .abs()
-            .unwrap()
-            .sum_all()
-            .unwrap()
-            .to_scalar::<f32>()
-            .unwrap();
-        assert!(diff > 0.0, "LoRA weights should have changed");
+    #[test]
+    fn test_sft_gradients_flow() {
+        // Verify that training produces finite loss and modifies weights at each epoch,
+        // confirming that gradients flow through the computation graph.
+        let device = Device::Cpu;
+        let mut lora = make_test_lora(4, 4, 2, 4.0);
+
+        let sft_config = SftConfig {
+            learning_rate: 0.01,
+            epochs: 3,
+            batch_size: 1,
+            max_seq_len: 32,
+        };
+
+        let a_before = lora.lora_a().clone();
+        let loss = train_sft(&mut lora, &sft_data(), &sft_config, &DummyTokenizer, &device).unwrap();
+
+        assert!(loss.is_finite(), "SFT loss should be finite, got {loss}");
+        assert!(tensor_abs_diff(&a_before, lora.lora_a()) > 0.0, "weights should change over 3 epochs");
     }
 
     #[test]
     fn test_sft_cross_entropy_loss() {
         let device = Device::Cpu;
-        let weight = Tensor::rand(0.0f32, 1.0f32, &[8, 8], &device).unwrap();
-        let frozen = Linear::new(weight, None);
-        let config = LoraConfig {
-            rank: 2,
-            alpha: 4.0,
-            dropout: 0.0,
-        };
-        let mut lora = LoraLinear::new(frozen, 8, 8, &config, &device).unwrap();
+        let mut lora = make_test_lora(8, 8, 2, 4.0);
 
         let data = vec![SftExample {
             input: "a b c".into(),
@@ -290,7 +296,6 @@ mod tests {
 
         let loss = train_sft(&mut lora, &data, &sft_config, &DummyTokenizer, &device).unwrap();
         assert!(loss.is_finite());
-        // Cross-entropy loss should be positive
         assert!(loss > 0.0, "cross-entropy loss should be positive, got {loss}");
     }
 }

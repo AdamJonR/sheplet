@@ -111,6 +111,73 @@ pub fn load_model_files(
     Ok((tokenizer, st_files))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repeat_kv_no_repeat() {
+        let device = Device::Cpu;
+        let x = Tensor::rand(0.0f32, 1.0f32, &[1, 4, 8, 16], &device).unwrap();
+        let out = repeat_kv(x.clone(), 1).unwrap();
+        // Should return unchanged tensor
+        assert_eq!(out.dims(), x.dims());
+        let diff = (out - x)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert_eq!(diff, 0.0);
+    }
+
+    #[test]
+    fn test_repeat_kv_doubles() {
+        let device = Device::Cpu;
+        // [batch=1, n_kv_head=2, seq_len=4, head_dim=8]
+        let x = Tensor::rand(0.0f32, 1.0f32, &[1, 2, 4, 8], &device).unwrap();
+        let out = repeat_kv(x, 2).unwrap();
+        // n_kv_head * n_rep = 2 * 2 = 4
+        assert_eq!(out.dims(), &[1, 4, 4, 8]);
+    }
+
+    #[test]
+    fn test_decoder_attention_mask_shape() {
+        let device = Device::Cpu;
+        let mask = prepare_decoder_attention_mask(2, 5, 3, &device, DType::F32).unwrap();
+        // [batch=2, 1, tgt_len=5, tgt_len + offset = 5+3 = 8]
+        assert_eq!(mask.dims(), &[2, 1, 5, 8]);
+    }
+
+    #[test]
+    fn test_decoder_attention_mask_is_causal() {
+        let device = Device::Cpu;
+        let mask = prepare_decoder_attention_mask(1, 4, 0, &device, DType::F32).unwrap();
+        // Shape: [1, 1, 4, 4]
+        let mask_2d: Vec<Vec<f32>> = mask.squeeze(0).unwrap().squeeze(0).unwrap().to_vec2().unwrap();
+        // Lower triangle (i >= j) should be 0.0, upper triangle (i < j) should be -inf
+        for i in 0..4 {
+            for j in 0..4 {
+                if i < j {
+                    assert!(
+                        mask_2d[i][j].is_infinite() && mask_2d[i][j] < 0.0,
+                        "position [{i},{j}] should be -inf, got {}",
+                        mask_2d[i][j]
+                    );
+                } else {
+                    assert_eq!(
+                        mask_2d[i][j], 0.0,
+                        "position [{i},{j}] should be 0.0, got {}",
+                        mask_2d[i][j]
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Trait for LoRA-trainable models, enabling generic training functions.
 pub trait LoraTrainable {
     fn device(&self) -> &Device;
@@ -123,4 +190,8 @@ pub trait LoraTrainable {
     fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor>;
     fn forward_reference_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor>;
     fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()>;
+    /// Get all LoRA tensors (a and b for each projection, each layer) for optimizer.
+    fn lora_tensors(&self) -> Vec<Tensor>;
+    /// Set LoRA tensors back after optimizer step (same order as lora_tensors).
+    fn set_lora_tensors(&mut self, tensors: &[Tensor]);
 }
