@@ -22,8 +22,8 @@ source "$SCRIPT_DIR/detect_gpu.sh"
 
 # --- Step 1: Validate prerequisites ------------------------------------------
 
-if [ ! -f "$TEST_DIR/model/model.gguf" ]; then
-    echo "Error: $TEST_DIR/model/model.gguf not found."
+if [ ! -f "$TEST_DIR/model/model.gguf" ] && ! ls "$TEST_DIR/model/"*.safetensors &>/dev/null; then
+    echo "Error: No model files found in $TEST_DIR/model/"
     echo "Run ./scripts/test_e2e.sh first to create the test project."
     exit 1
 fi
