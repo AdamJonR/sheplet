@@ -15,6 +15,25 @@ pub enum ModelArch {
     Gemma3,
 }
 
+/// Parse `eos_token_id` from a model's config.json string.
+/// Handles both single integer and array-of-integers formats.
+fn parse_eos_token_ids(config_str: &str) -> Vec<u32> {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(config_str) {
+        match &json["eos_token_id"] {
+            serde_json::Value::Number(n) => {
+                n.as_u64().map(|v| vec![v as u32]).unwrap_or_default()
+            }
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u32))
+                .collect(),
+            _ => vec![],
+        }
+    } else {
+        vec![]
+    }
+}
+
 pub fn detect_model_arch(model_dir: impl AsRef<Path>) -> Result<ModelArch> {
     let (arch, _) = detect_model_arch_with_config(model_dir)?;
     Ok(arch)
@@ -76,7 +95,7 @@ pub struct PhiGenerator {
     model: InferenceModel,
     tokenizer: Tokenizer,
     device: Device,
-    eos_token_id: u32,
+    eos_token_ids: Vec<u32>,
 }
 
 impl PhiGenerator {
@@ -172,19 +191,43 @@ impl PhiGenerator {
             }
         };
 
-        // Get EOS token ID — try model-specific tokens
-        let eos_token_id = tokenizer
-            .token_to_id("<end_of_turn>")
-            .or_else(|| tokenizer.token_to_id("<eos>"))
-            .or_else(|| tokenizer.token_to_id("<|end|>"))
-            .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
-            .unwrap_or(1);
+        // Determine EOS token IDs: prefer config.json, fall back to tokenizer heuristic
+        let eos_token_ids = if gguf_path.exists() {
+            // GGUF models don't have config.json — use tokenizer heuristic
+            let id = tokenizer
+                .token_to_id("<end_of_turn>")
+                .or_else(|| tokenizer.token_to_id("<eos>"))
+                .or_else(|| tokenizer.token_to_id("<|end|>"))
+                .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
+                .unwrap_or(1);
+            vec![id]
+        } else {
+            let config_path = model_dir.join("config.json");
+            let from_config = if let Ok(config_str) = std::fs::read_to_string(&config_path) {
+                parse_eos_token_ids(&config_str)
+            } else {
+                vec![]
+            };
+            if from_config.is_empty() {
+                // Fall back to tokenizer heuristic
+                let id = tokenizer
+                    .token_to_id("<end_of_turn>")
+                    .or_else(|| tokenizer.token_to_id("<eos>"))
+                    .or_else(|| tokenizer.token_to_id("<|end|>"))
+                    .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
+                    .unwrap_or(1);
+                vec![id]
+            } else {
+                from_config
+            }
+        };
+        eprintln!("EOS token IDs: {:?}", eos_token_ids);
 
         Ok(Self {
             model,
             tokenizer,
             device: device.clone(),
-            eos_token_id,
+            eos_token_ids,
         })
     }
 
@@ -201,10 +244,19 @@ impl PhiGenerator {
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = last_token_logits(&logits)?;
+        let logits_vec = logits.to_vec1::<f32>()?;
         let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
-        if next_token == self.eos_token_id {
-            eprintln!("WARNING: model produced EOS as very first token (id={}) — returning empty response", self.eos_token_id);
+        if self.eos_token_ids.contains(&next_token) {
+            // Log top-5 for diagnostics
+            let mut indexed: Vec<(usize, f32)> = logits_vec.iter().copied().enumerate().collect();
+            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            eprintln!("WARNING: model produced stop token as very first token (id={next_token})");
+            eprintln!("  Top-5 logits:");
+            for (i, (idx, val)) in indexed.iter().take(5).enumerate() {
+                let token_str = self.tokenizer.decode(&[*idx as u32], false).unwrap_or_default();
+                eprintln!("    {}: token {} ({:?}) = {:.4}", i + 1, idx, token_str, val);
+            }
             return Ok(generated);
         }
         generated.push(next_token);
@@ -217,7 +269,7 @@ impl PhiGenerator {
             let logits = last_token_logits(&logits)?;
             let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &generated)?;
 
-            if next_token == self.eos_token_id {
+            if self.eos_token_ids.contains(&next_token) {
                 break;
             }
             generated.push(next_token);
@@ -267,8 +319,8 @@ impl TextGenerator for PhiGenerator {
         let logits = last_token_logits(&logits)?;
         let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
-        if first_token == self.eos_token_id {
-            eprintln!("WARNING: model produced EOS as very first token (id={}) — returning empty response", self.eos_token_id);
+        if self.eos_token_ids.contains(&first_token) {
+            eprintln!("WARNING: model produced stop token as very first token (id={first_token}) — returning empty response");
             return Ok(());
         }
 
@@ -294,7 +346,7 @@ impl TextGenerator for PhiGenerator {
             let logits = last_token_logits(&logits)?;
             let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &all_generated)?;
 
-            if next_token == self.eos_token_id {
+            if self.eos_token_ids.contains(&next_token) {
                 break;
             }
 
@@ -703,6 +755,29 @@ mod tests {
             lora_layer_to_weight_path("something_else"),
             "something_else.weight"
         );
+    }
+
+    #[test]
+    fn test_parse_eos_token_ids_single() {
+        let config = r#"{"model_type": "gemma3_text", "eos_token_id": 1}"#;
+        assert_eq!(parse_eos_token_ids(config), vec![1]);
+    }
+
+    #[test]
+    fn test_parse_eos_token_ids_array() {
+        let config = r#"{"model_type": "gemma3_text", "eos_token_id": [1, 106]}"#;
+        assert_eq!(parse_eos_token_ids(config), vec![1, 106]);
+    }
+
+    #[test]
+    fn test_parse_eos_token_ids_missing() {
+        let config = r#"{"model_type": "phi3"}"#;
+        assert!(parse_eos_token_ids(config).is_empty());
+    }
+
+    #[test]
+    fn test_parse_eos_token_ids_invalid_json() {
+        assert!(parse_eos_token_ids("not json").is_empty());
     }
 
     #[test]
