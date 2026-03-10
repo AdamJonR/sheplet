@@ -9,6 +9,50 @@ use tokenizers::Tokenizer;
 use crate::error::{RagError, Result};
 use crate::quantized_phi3;
 
+/// Local config struct that mirrors `phi3::Config` but accepts `rope_scaling` as any JSON value
+/// (phi-4-mini has it as a map with `long_factor`/`short_factor`, while phi-3 has it as a string).
+#[derive(Debug, Clone, serde::Deserialize)]
+struct Phi3InferenceConfig {
+    pub vocab_size: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub rms_norm_eps: f64,
+    pub rope_theta: f64,
+    #[serde(default)]
+    pub bos_token_id: Option<u32>,
+    #[serde(default)]
+    pub eos_token_id: Option<u32>,
+    #[serde(default)]
+    pub rope_scaling: Option<serde_json::Value>,
+    pub max_position_embeddings: usize,
+}
+
+impl From<Phi3InferenceConfig> for phi3::Config {
+    fn from(c: Phi3InferenceConfig) -> Self {
+        // candle's phi3 model ignores rope_scaling entirely — only rope_theta matters
+        let rope_scaling = c.rope_scaling.and_then(|v| v.as_str().map(String::from));
+        Self {
+            vocab_size: c.vocab_size,
+            hidden_act: c.hidden_act,
+            hidden_size: c.hidden_size,
+            intermediate_size: c.intermediate_size,
+            num_hidden_layers: c.num_hidden_layers,
+            num_attention_heads: c.num_attention_heads,
+            num_key_value_heads: c.num_key_value_heads,
+            rms_norm_eps: c.rms_norm_eps,
+            rope_theta: c.rope_theta,
+            bos_token_id: c.bos_token_id,
+            eos_token_id: c.eos_token_id,
+            rope_scaling,
+            max_position_embeddings: c.max_position_embeddings,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
     Phi3,
@@ -169,7 +213,8 @@ impl PhiGenerator {
                     InferenceModel::Gemma3(model)
                 }
                 ModelArch::Phi3 => {
-                    let config: phi3::Config = serde_json::from_str(&config_str)?;
+                    let config: phi3::Config =
+                        serde_json::from_str::<Phi3InferenceConfig>(&config_str)?.into();
 
                     let dtype = DType::F32;
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
@@ -789,6 +834,77 @@ mod tests {
         // top_p=1.0 to not filter, repetition_penalty=1.0 to not modify
         let token = sample_token(&logits, 0.01, 1.0, 1.0, &[]).unwrap();
         assert_eq!(token, 2, "greedy should pick index 2 (highest logit)");
+    }
+
+    #[test]
+    fn test_phi4_mini_config_deserializes() {
+        let config_json = r#"{
+            "vocab_size": 200064,
+            "hidden_act": "silu",
+            "hidden_size": 3072,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 24,
+            "num_key_value_heads": 8,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 10000.0,
+            "bos_token_id": 199999,
+            "eos_token_id": 199999,
+            "rope_scaling": {
+                "long_factor": [1.0, 1.1, 1.2],
+                "short_factor": [1.0, 1.1, 1.2],
+                "type": "longrope"
+            },
+            "max_position_embeddings": 131072
+        }"#;
+        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
+            .expect("should deserialize phi-4-mini config")
+            .into();
+        assert_eq!(config.vocab_size, 200064);
+        assert_eq!(config.num_hidden_layers, 32);
+        // rope_scaling map should be dropped (not a string)
+        assert!(config.rope_scaling.is_none());
+    }
+
+    #[test]
+    fn test_phi3_string_rope_scaling_preserved() {
+        let config_json = r#"{
+            "vocab_size": 32064,
+            "hidden_act": "silu",
+            "hidden_size": 3072,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 32,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 10000.0,
+            "rope_scaling": "su",
+            "max_position_embeddings": 4096
+        }"#;
+        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
+            .expect("should deserialize phi-3 config")
+            .into();
+        assert_eq!(config.rope_scaling.as_deref(), Some("su"));
+    }
+
+    #[test]
+    fn test_phi3_null_rope_scaling() {
+        let config_json = r#"{
+            "vocab_size": 32064,
+            "hidden_act": "silu",
+            "hidden_size": 3072,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 32,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 4096
+        }"#;
+        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
+            .expect("should deserialize config without rope_scaling")
+            .into();
+        assert!(config.rope_scaling.is_none());
     }
 
     #[test]
