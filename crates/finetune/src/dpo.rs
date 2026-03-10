@@ -312,6 +312,16 @@ pub fn train_dpo_full(
             let rejected_targets: Vec<u32> =
                 rejected_tokens[prompt_len..rejected_len].to_vec();
 
+            // Narrow logits to match target count (last logit row predicts
+            // beyond the sequence and has no corresponding target token)
+            let n_chosen = chosen_targets.len();
+            let policy_resp_chosen = policy_resp_chosen.narrow(0, 0, n_chosen)?;
+            let ref_resp_chosen = ref_resp_chosen.narrow(0, 0, n_chosen)?;
+
+            let n_rejected = rejected_targets.len();
+            let policy_resp_rejected = policy_resp_rejected.narrow(0, 0, n_rejected)?;
+            let ref_resp_rejected = ref_resp_rejected.narrow(0, 0, n_rejected)?;
+
             // Compute per-token log-probs and sum
             let log_pi_chosen =
                 gather_log_probs(&policy_resp_chosen, &chosen_targets, &device)?;
@@ -343,7 +353,137 @@ pub fn train_dpo_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_utils::LoraTrainable;
     use crate::test_fixtures::{make_test_lora, tensor_abs_diff, DummyTokenizer};
+    /// Mock model implementing `LoraTrainable` for testing `train_dpo_full`
+    /// without requiring real model weights.
+    struct MockLoraTrainable {
+        device: Device,
+        vocab_size: usize,
+        weight: Tensor,
+        lora_a: Tensor,
+        lora_b: Tensor,
+    }
+
+    impl MockLoraTrainable {
+        fn new(vocab_size: usize) -> Self {
+            let device = Device::Cpu;
+            let weight =
+                Tensor::rand(0.0f32, 1.0f32, &[vocab_size, vocab_size], &device).unwrap();
+            let rank = 4;
+            let lora_a =
+                Tensor::randn(0.0f32, 0.01f32, &[rank, vocab_size], &device).unwrap();
+            let lora_b =
+                Tensor::randn(0.0f32, 0.01f32, &[vocab_size, rank], &device).unwrap();
+            Self {
+                device,
+                vocab_size,
+                weight,
+                lora_a,
+                lora_b,
+            }
+        }
+
+        /// Produce logits [1, seq_len, vocab_size] from input IDs.
+        /// Uses random activations (constant w.r.t. Vars) multiplied through
+        /// LoRA weights to ensure gradient flow.
+        fn run_forward(&self, input_ids: &Tensor, with_lora: bool) -> candle_core::Result<Tensor> {
+            let (_batch, seq_len) = input_ids.dims2()?;
+            // Use random activations as input features (constant w.r.t. LoRA vars)
+            let activations = Tensor::rand(
+                0.0f32,
+                1.0f32,
+                &[seq_len, self.vocab_size],
+                &self.device,
+            )?;
+            let logits = activations.matmul(&self.weight.t()?)?; // [seq_len, vocab_size]
+            let logits = if with_lora {
+                let lora_out = activations
+                    .matmul(&self.lora_a.t()?)?
+                    .matmul(&self.lora_b.t()?)?;
+                (logits + lora_out)?
+            } else {
+                logits
+            };
+            logits.unsqueeze(0) // [1, seq_len, vocab_size]
+        }
+
+        /// Forward returning logits from `start_pos` onwards (mimics real model behavior).
+        fn run_forward_from(
+            &self,
+            input_ids: &Tensor,
+            with_lora: bool,
+            start_pos: usize,
+        ) -> candle_core::Result<Tensor> {
+            let full = self.run_forward(input_ids, with_lora)?;
+            let (_b, seq_len, _v) = full.dims3()?;
+            // Real models return seq_len - start_pos rows from start_pos
+            full.narrow(1, start_pos, seq_len - start_pos)
+        }
+    }
+
+    impl LoraTrainable for MockLoraTrainable {
+        fn device(&self) -> &Device {
+            &self.device
+        }
+
+        fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+            Ok(text
+                .split_whitespace()
+                .enumerate()
+                .map(|(i, _)| (i % self.vocab_size) as u32)
+                .collect())
+        }
+
+        fn clear_kv_cache(&mut self) {}
+
+        fn forward(
+            &mut self,
+            input_ids: &Tensor,
+            _seqlen_offset: usize,
+        ) -> candle_core::Result<Tensor> {
+            self.run_forward(input_ids, true)
+        }
+
+        fn forward_reference(
+            &mut self,
+            input_ids: &Tensor,
+            _seqlen_offset: usize,
+        ) -> candle_core::Result<Tensor> {
+            self.run_forward(input_ids, false)
+        }
+
+        fn forward_from(
+            &mut self,
+            input_ids: &Tensor,
+            _seqlen_offset: usize,
+            start_pos: usize,
+        ) -> candle_core::Result<Tensor> {
+            self.run_forward_from(input_ids, true, start_pos)
+        }
+
+        fn forward_reference_from(
+            &mut self,
+            input_ids: &Tensor,
+            _seqlen_offset: usize,
+            start_pos: usize,
+        ) -> candle_core::Result<Tensor> {
+            self.run_forward_from(input_ids, false, start_pos)
+        }
+
+        fn save_adapter(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn lora_tensors(&self) -> Vec<Tensor> {
+            vec![self.lora_a.clone(), self.lora_b.clone()]
+        }
+
+        fn set_lora_tensors(&mut self, tensors: &[Tensor]) {
+            self.lora_a = tensors[0].clone();
+            self.lora_b = tensors[1].clone();
+        }
+    }
 
     fn dpo_data() -> Vec<DpoExample> {
         vec![
@@ -455,5 +595,52 @@ mod tests {
         assert!(val.is_finite());
         // Log-probs should be negative (log of probabilities < 1)
         assert!(val < 0.0, "sum of log-probs should be negative, got {val}");
+    }
+
+    /// Regression test for the scatter-add shape mismatch fix in `train_dpo_full`.
+    ///
+    /// Without the narrowing fix (lines that narrow logits to match target count),
+    /// `gather_log_probs` would fail because `forward_from(start_pos = prompt_len - 1)`
+    /// returns one more logit row than there are target tokens.
+    #[test]
+    fn test_dpo_full_shape_alignment() {
+        let vocab_size = 16;
+        let mut mock = MockLoraTrainable::new(vocab_size);
+
+        let data = vec![
+            DpoExample {
+                prompt: "question one two".into(),
+                chosen: "good answer here today".into(),
+                rejected: "bad answer here now".into(),
+            },
+            DpoExample {
+                prompt: "another prompt words".into(),
+                chosen: "correct response text".into(),
+                rejected: "wrong response text".into(),
+            },
+        ];
+
+        let config = DpoConfig {
+            beta: 0.1,
+            learning_rate: 0.01,
+            epochs: 2,
+            max_seq_len: 32,
+        };
+
+        let lora_before = mock.lora_tensors();
+
+        let loss = train_dpo_full(&mut mock, &data, &config)
+            .expect("train_dpo_full should not fail with shape mismatch");
+
+        assert!(loss.is_finite(), "loss should be finite, got {loss}");
+
+        // LoRA weights should have changed after training
+        let lora_after = mock.lora_tensors();
+        let diff_a = tensor_abs_diff(&lora_before[0], &lora_after[0]);
+        let diff_b = tensor_abs_diff(&lora_before[1], &lora_after[1]);
+        assert!(
+            diff_a > 0.0 && diff_b > 0.0,
+            "both LoRA weights should change after training (diff_a={diff_a}, diff_b={diff_b})"
+        );
     }
 }
