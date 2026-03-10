@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Sheplet E2E Manual Test Script
-# Exercises the full instructor pipeline: init, ingest, model, finetune
+# Exercises the full instructor pipeline: init, ingest, model, finetune, config, bundle
 # =============================================================================
 
 # --- Step 0: Environment -----------------------------------------------------
@@ -16,14 +16,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 
-MODEL="${1:-phi}"   # "phi" or "gemma"
+MODEL="${1:-phi}"   # "phi", "gemma270m", or "gemma1b"
 
 case "$MODEL" in
   phi)
     MODEL_NAME="phi-4-mini-instruct"
     QUANTIZATION="q4-k-m"
     ;;
-  gemma)
+  gemma270m)
+    MODEL_NAME="gemma270m"
+    QUANTIZATION="none"
+    ;;
+  gemma1b)
     MODEL_NAME="gemma-3-1b-it"
     QUANTIZATION="none"
     if [ -z "${HF_TOKEN:-}" ]; then
@@ -32,7 +36,7 @@ case "$MODEL" in
     fi
     ;;
   *)
-    echo "Usage: $0 [phi|gemma]"
+    echo "Usage: $0 [phi|gemma270m|gemma1b]"
     exit 1
     ;;
 esac
@@ -237,7 +241,25 @@ STEP_START=$SECONDS
 TIME_DPO=$(( SECONDS - STEP_START ))
 echo "--- DPO Train completed in ${TIME_DPO}s ---"
 
-# --- Step 9: Summary ----------------------------------------------------------
+# --- Step 9: Config -----------------------------------------------------------
+
+echo ""
+echo "=== Config ==="
+STEP_START=$SECONDS
+"$INSTRUCTOR" config --project "$TEST_DIR" --system_prompt "You are a helpful biology tutor. Answer questions accurately using course materials."
+TIME_CONFIG=$(( SECONDS - STEP_START ))
+echo "--- Config completed in ${TIME_CONFIG}s ---"
+
+# --- Step 10: Bundle ----------------------------------------------------------
+
+echo ""
+echo "=== Bundle ==="
+STEP_START=$SECONDS
+"$INSTRUCTOR" bundle --project "$TEST_DIR" --output "$PROJECT_ROOT/test-project.sheplet"
+TIME_BUNDLE=$(( SECONDS - STEP_START ))
+echo "--- Bundle completed in ${TIME_BUNDLE}s ---"
+
+# --- Step 11: Summary ---------------------------------------------------------
 
 TOTAL_ELAPSED=$(( SECONDS - TOTAL_START ))
 
@@ -256,6 +278,9 @@ fi
 if [ -d "$TEST_DIR/database" ]; then
     echo "  database/:           $(du -sh "$TEST_DIR/database" | cut -f1)"
 fi
+if [ -f "$PROJECT_ROOT/test-project.sheplet" ]; then
+    echo "  test-project.sheplet: $(du -h "$PROJECT_ROOT/test-project.sheplet" | cut -f1)"
+fi
 
 echo ""
 echo "=== Timing Summary ==="
@@ -264,6 +289,8 @@ printf "  %-14s %ss\n" "Init:" "$TIME_INIT"
 printf "  %-14s %ss\n" "Ingest:" "$TIME_INGEST"
 printf "  %-14s %ss\n" "Model:" "$TIME_MODEL"
 printf "  %-14s %ss\n" "DPO Train:" "$TIME_DPO"
+printf "  %-14s %ss\n" "Config:" "$TIME_CONFIG"
+printf "  %-14s %ss\n" "Bundle:" "$TIME_BUNDLE"
 printf "  %-14s %ss\n" "Total:" "$TOTAL_ELAPSED"
 
 echo ""
