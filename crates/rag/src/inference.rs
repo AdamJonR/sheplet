@@ -29,6 +29,8 @@ struct Phi3InferenceConfig {
     #[serde(default)]
     pub rope_scaling: Option<serde_json::Value>,
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
 }
 
 impl From<Phi3InferenceConfig> for phi3::Config {
@@ -202,6 +204,7 @@ impl PhiGenerator {
                             adapter_path.unwrap(),
                             device,
                             dtype,
+                            false,
                         )?
                     } else {
                         unsafe {
@@ -213,8 +216,10 @@ impl PhiGenerator {
                     InferenceModel::Gemma3(model)
                 }
                 ModelArch::Phi3 => {
-                    let config: phi3::Config =
-                        serde_json::from_str::<Phi3InferenceConfig>(&config_str)?.into();
+                    let phi3_config: Phi3InferenceConfig =
+                        serde_json::from_str(&config_str)?;
+                    let tie_embeddings = phi3_config.tie_word_embeddings;
+                    let config: phi3::Config = phi3_config.into();
 
                     let dtype = DType::F32;
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
@@ -223,11 +228,12 @@ impl PhiGenerator {
                             adapter_path.unwrap(),
                             device,
                             dtype,
+                            tie_embeddings,
                         )?
                     } else {
-                        unsafe {
-                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                        }
+                        load_phi3_safetensors(
+                            &safetensors_files, tie_embeddings, device, dtype,
+                        )?
                     };
 
                     let model = phi3::Model::new(&config, vb)?;
@@ -611,7 +617,7 @@ mod tests {
         candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
 
         // Merge
-        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype).unwrap();
+        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype, false).unwrap();
 
         // Get merged weight
         let merged_weight = vb
@@ -669,7 +675,7 @@ mod tests {
         candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
 
         // Merge
-        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype).unwrap();
+        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype, false).unwrap();
 
         // Weight should be unchanged
         let weight = vb
@@ -718,7 +724,7 @@ mod tests {
         candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
 
         // Merge should fail because no pairs matched
-        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype);
+        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype, false);
         assert!(result.is_err(), "should error when no LoRA pairs match base weights");
         let err_msg = result.err().map(|e| e.to_string()).unwrap();
         assert!(
@@ -759,7 +765,7 @@ mod tests {
         candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
 
         // Merge should fail due to NaN/Inf in merged tensors
-        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype);
+        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype, false);
         assert!(result.is_err(), "should error when merged weights contain NaN/Inf");
         let err_msg = result.err().map(|e| e.to_string()).unwrap();
         assert!(
@@ -908,6 +914,43 @@ mod tests {
     }
 
     #[test]
+    fn test_phi4_mini_tie_word_embeddings_deserialized() {
+        let config_json = r#"{
+            "vocab_size": 200064,
+            "hidden_act": "silu",
+            "hidden_size": 3072,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 24,
+            "num_key_value_heads": 8,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 10000.0,
+            "tie_word_embeddings": true,
+            "max_position_embeddings": 131072
+        }"#;
+        let config: Phi3InferenceConfig = serde_json::from_str(config_json).unwrap();
+        assert!(config.tie_word_embeddings);
+    }
+
+    #[test]
+    fn test_phi3_tie_word_embeddings_default_false() {
+        let config_json = r#"{
+            "vocab_size": 32064,
+            "hidden_act": "silu",
+            "hidden_size": 3072,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 32,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 4096
+        }"#;
+        let config: Phi3InferenceConfig = serde_json::from_str(config_json).unwrap();
+        assert!(!config.tie_word_embeddings);
+    }
+
+    #[test]
     fn test_sample_token_repetition_penalty() {
         let device = Device::Cpu;
         // Token 2 has highest logit, but we penalize it
@@ -931,6 +974,29 @@ mod tests {
     }
 }
 
+/// Load safetensors into a HashMap, injecting `lm_head.weight` as an alias for
+/// `model.embed_tokens.weight` when `tie_word_embeddings` is true.
+fn load_phi3_safetensors(
+    safetensors_files: &[std::path::PathBuf],
+    tie_word_embeddings: bool,
+    device: &Device,
+    dtype: DType,
+) -> Result<VarBuilder<'static>> {
+    let mut tensors: std::collections::HashMap<String, Tensor> =
+        std::collections::HashMap::new();
+    for file in safetensors_files {
+        tensors.extend(candle_core::safetensors::load(file, device)?);
+    }
+    if tie_word_embeddings {
+        if let Some(embed) = tensors.get("model.embed_tokens.weight") {
+            let embed = embed.clone();
+            tensors.insert("lm_head.weight".to_string(), embed);
+            eprintln!("Tied embeddings: aliased lm_head.weight → model.embed_tokens.weight");
+        }
+    }
+    Ok(VarBuilder::from_tensors(tensors, dtype, device))
+}
+
 /// Merge LoRA adapter weights into base model weights.
 ///
 /// Loads all base safetensors into memory, applies LoRA deltas
@@ -941,6 +1007,7 @@ fn merge_lora_adapter(
     adapter_path: &Path,
     device: &Device,
     dtype: DType,
+    tie_word_embeddings: bool,
 ) -> Result<VarBuilder<'static>> {
     // Load all base tensors into memory
     let mut base_tensors: std::collections::HashMap<String, Tensor> =
@@ -949,6 +1016,16 @@ fn merge_lora_adapter(
         let tensors = candle_core::safetensors::load(file, device)?;
         base_tensors.extend(tensors);
     }
+
+    // Inject lm_head.weight alias when embeddings are tied
+    if tie_word_embeddings {
+        if let Some(embed) = base_tensors.get("model.embed_tokens.weight") {
+            let embed = embed.clone();
+            base_tensors.insert("lm_head.weight".to_string(), embed);
+            eprintln!("Tied embeddings: aliased lm_head.weight → model.embed_tokens.weight");
+        }
+    }
+
     eprintln!(
         "LoRA merge: loaded {} base tensors from {} file(s)",
         base_tensors.len(),
