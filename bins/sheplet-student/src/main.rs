@@ -17,6 +17,7 @@ async fn main() -> Result<()> {
 
     let mut port = DEFAULT_PORT;
     let mut base_dir = default_base_dir();
+    let mut no_adapter = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,15 +32,19 @@ async fn main() -> Result<()> {
                     base_dir = PathBuf::from(dir);
                 }
             }
+            "--no-adapter" => {
+                no_adapter = true;
+            }
             "--help" | "-h" => {
                 println!("sheplet-student - Course assistant desktop client");
                 println!();
                 println!("Usage: sheplet-student [OPTIONS]");
                 println!();
                 println!("Options:");
-                println!("  --port <PORT>  Port to listen on (default: {DEFAULT_PORT})");
-                println!("  --dir <DIR>    Base directory for data (default: ~/sheplet-student)");
-                println!("  --help, -h     Show this help message");
+                println!("  --port <PORT>    Port to listen on (default: {DEFAULT_PORT})");
+                println!("  --dir <DIR>      Base directory for data (default: ~/sheplet-student)");
+                println!("  --no-adapter     Skip LoRA adapter, use base model only (debug)");
+                println!("  --help, -h       Show this help message");
                 return Ok(());
             }
             _ => {}
@@ -56,7 +61,12 @@ async fn main() -> Result<()> {
         courses: RwLock::new(CourseManager::new()),
         conversations,
         base_dir: base_dir.clone(),
+        no_adapter,
     });
+
+    if no_adapter {
+        println!("WARNING: --no-adapter flag set — LoRA adapters will NOT be loaded");
+    }
 
     let app = server::build_router(state);
     let addr = format!("127.0.0.1:{port}");

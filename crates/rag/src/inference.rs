@@ -122,6 +122,16 @@ impl PhiGenerator {
                     let config: crate::gemma3::Gemma3Config =
                         serde_json::from_str(&config_str)?;
 
+                    let sliding_count = config.layer_types.iter().filter(|t| t.as_str() == "sliding_attention").count();
+                    let global_count = config.num_hidden_layers - sliding_count;
+                    eprintln!(
+                        "Gemma3 config: hidden_size={}, head_dim={}, layers={} ({} sliding + {} global), \
+                         rope_theta={}, rope_local_base_freq={:?}, sliding_window={:?}",
+                        config.hidden_size, config.head_dim, config.num_hidden_layers,
+                        sliding_count, global_count,
+                        config.rope_theta, config.rope_local_base_freq, config.sliding_window,
+                    );
+
                     let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
                         merge_lora_adapter(
@@ -194,13 +204,15 @@ impl PhiGenerator {
         let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if next_token == self.eos_token_id {
+            eprintln!("WARNING: model produced EOS as very first token (id={}) — returning empty response", self.eos_token_id);
             return Ok(generated);
         }
         generated.push(next_token);
         tokens.push(next_token);
 
-        for i in 1..max_tokens {
-            let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+        for _ in 1..max_tokens {
+            let last_token = *tokens.last().unwrap();
+            let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
             let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &generated)?;
@@ -210,10 +222,6 @@ impl PhiGenerator {
             }
             generated.push(next_token);
             tokens.push(next_token);
-
-            if i >= max_tokens - 1 {
-                break;
-            }
         }
 
         Ok(generated)
@@ -260,6 +268,7 @@ impl TextGenerator for PhiGenerator {
         let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         if first_token == self.eos_token_id {
+            eprintln!("WARNING: model produced EOS as very first token (id={}) — returning empty response", self.eos_token_id);
             return Ok(());
         }
 
@@ -583,6 +592,120 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_lora_adapter_mismatched_keys_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        // Create base model with one key
+        let base_weight = Tensor::ones(&[4, 8], dtype, &device).unwrap();
+        let mut base_tensors = std::collections::HashMap::new();
+        base_tensors.insert(
+            "model.layers.0.self_attn.q_proj.weight".to_string(),
+            base_weight,
+        );
+        let base_path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&base_tensors, &base_path).unwrap();
+
+        // Create adapter with LoRA pairs that DON'T match any base key
+        let lora_a = Tensor::ones(&[2, 8], DType::F32, &device).unwrap();
+        let lora_b = Tensor::ones(&[4, 2], DType::F32, &device).unwrap();
+        let scale = Tensor::from_vec(vec![1.0f32], &[1], &device).unwrap();
+
+        let mut adapter_tensors = std::collections::HashMap::new();
+        adapter_tensors.insert("layers.99.q_proj.lora_a".to_string(), lora_a);
+        adapter_tensors.insert("layers.99.q_proj.lora_b".to_string(), lora_b);
+        adapter_tensors.insert("lora_scale".to_string(), scale);
+
+        let adapter_path = dir.path().join("adapter.safetensors");
+        candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
+
+        // Merge should fail because no pairs matched
+        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype);
+        assert!(result.is_err(), "should error when no LoRA pairs match base weights");
+        let err_msg = result.err().map(|e| e.to_string()).unwrap();
+        assert!(
+            err_msg.contains("none of the"),
+            "error should mention no pairs matched: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_merge_lora_adapter_nan_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+
+        // Create base model with a weight containing Inf (which can produce NaN when added)
+        let inf_data = vec![f32::INFINITY; 32];
+        let base_weight = Tensor::from_vec(inf_data, &[4, 8], &device).unwrap();
+        let mut base_tensors = std::collections::HashMap::new();
+        base_tensors.insert(
+            "model.layers.0.self_attn.q_proj.weight".to_string(),
+            base_weight,
+        );
+        let base_path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&base_tensors, &base_path).unwrap();
+
+        // Create adapter that produces -Inf delta to create NaN (Inf + (-Inf) = NaN)
+        let neg_inf_data = vec![f32::NEG_INFINITY; 16];
+        let lora_a = Tensor::from_vec(neg_inf_data.clone(), &[2, 8], &device).unwrap();
+        let lora_b = Tensor::ones(&[4, 2], DType::F32, &device).unwrap();
+        let scale = Tensor::from_vec(vec![1.0f32], &[1], &device).unwrap();
+
+        let mut adapter_tensors = std::collections::HashMap::new();
+        adapter_tensors.insert("layers.0.q_proj.lora_a".to_string(), lora_a);
+        adapter_tensors.insert("layers.0.q_proj.lora_b".to_string(), lora_b);
+        adapter_tensors.insert("lora_scale".to_string(), scale);
+
+        let adapter_path = dir.path().join("adapter.safetensors");
+        candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
+
+        // Merge should fail due to NaN/Inf in merged tensors
+        let result = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype);
+        assert!(result.is_err(), "should error when merged weights contain NaN/Inf");
+        let err_msg = result.err().map(|e| e.to_string()).unwrap();
+        assert!(
+            err_msg.contains("invalid values"),
+            "error should mention invalid values: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_lora_layer_to_weight_path_all_projections() {
+        // q_proj
+        assert_eq!(
+            lora_layer_to_weight_path("layers.0.q_proj"),
+            "model.layers.0.self_attn.q_proj.weight"
+        );
+        // k_proj
+        assert_eq!(
+            lora_layer_to_weight_path("layers.3.k_proj"),
+            "model.layers.3.self_attn.k_proj.weight"
+        );
+        // v_proj
+        assert_eq!(
+            lora_layer_to_weight_path("layers.17.v_proj"),
+            "model.layers.17.self_attn.v_proj.weight"
+        );
+        // o_proj
+        assert_eq!(
+            lora_layer_to_weight_path("layers.25.o_proj"),
+            "model.layers.25.self_attn.o_proj.weight"
+        );
+        // qkv_proj (Phi3)
+        assert_eq!(
+            lora_layer_to_weight_path("layers.1.qkv_proj"),
+            "model.layers.1.self_attn.qkv_proj.weight"
+        );
+        // Fallback for unrecognized format
+        assert_eq!(
+            lora_layer_to_weight_path("something_else"),
+            "something_else.weight"
+        );
+    }
+
+    #[test]
     fn test_sample_token_greedy() {
         // With very low temperature, should pick highest logit
         let device = Device::Cpu;
@@ -635,6 +758,11 @@ fn merge_lora_adapter(
         let tensors = candle_core::safetensors::load(file, device)?;
         base_tensors.extend(tensors);
     }
+    eprintln!(
+        "LoRA merge: loaded {} base tensors from {} file(s)",
+        base_tensors.len(),
+        safetensors_files.len()
+    );
 
     // Load adapter tensors
     let adapter_data = candle_core::safetensors::load(adapter_path, device)?;
@@ -659,6 +787,7 @@ fn merge_lora_adapter(
     }
 
     if lora_pairs.is_empty() {
+        eprintln!("LoRA merge: WARNING: adapter contains no LoRA pairs — returning unmodified base weights");
         return Ok(VarBuilder::from_tensors(base_tensors, dtype, device));
     }
 
@@ -672,7 +801,15 @@ fn merge_lora_adapter(
         .map(|s| s as f64)
         .unwrap_or(2.0);
 
+    eprintln!(
+        "LoRA merge: found {} LoRA pair(s), scale = {:.4}",
+        lora_pairs.len(),
+        scale
+    );
+
     // Apply LoRA deltas to base weights
+    let mut matched_count = 0u32;
+    let mut unmatched: Vec<String> = Vec::new();
     for (layer_name, (lora_a, lora_b)) in &lora_pairs {
         if let (Some(a), Some(b)) = (lora_a, lora_b) {
             // W_delta = B @ A * scale
@@ -683,8 +820,75 @@ fn merge_lora_adapter(
             let weight_path = lora_layer_to_weight_path(layer_name);
             if let Some(base_weight) = base_tensors.get(&weight_path) {
                 let merged = (base_weight + &delta)?;
+
+                // Compute delta magnitude relative to base weight
+                let base_norm = base_weight
+                    .sqr()?
+                    .sum_all()?
+                    .to_dtype(DType::F64)?
+                    .to_scalar::<f64>()?
+                    .sqrt();
+                let delta_norm = delta
+                    .sqr()?
+                    .sum_all()?
+                    .to_dtype(DType::F64)?
+                    .to_scalar::<f64>()?
+                    .sqrt();
+                let ratio = if base_norm > 0.0 {
+                    delta_norm / base_norm
+                } else {
+                    f64::INFINITY
+                };
+
+                if ratio > 1.0 {
+                    eprintln!(
+                        "LoRA merge: WARNING: delta/base L2 ratio = {:.4} for {} — delta is LARGER than base weight",
+                        ratio, weight_path
+                    );
+                } else {
+                    eprintln!(
+                        "LoRA merge: merged {} (delta/base L2 ratio = {:.4})",
+                        weight_path, ratio
+                    );
+                }
+
                 base_tensors.insert(weight_path, merged);
+                matched_count += 1;
+            } else {
+                eprintln!(
+                    "LoRA merge: WARNING: no matching base weight for adapter layer '{}' (mapped to '{}')",
+                    layer_name, weight_path
+                );
+                unmatched.push(layer_name.clone());
             }
+        }
+    }
+
+    if matched_count == 0 {
+        return Err(RagError::Other(format!(
+            "LoRA merge failed: none of the {} adapter pair(s) matched any base weight. \
+             Unmatched layers: {:?}",
+            lora_pairs.len(),
+            unmatched
+        )));
+    }
+
+    eprintln!(
+        "LoRA merge: {matched_count}/{} pair(s) matched and merged",
+        lora_pairs.len()
+    );
+
+    // Validate merged tensors for NaN/Inf
+    for (name, tensor) in &base_tensors {
+        let flat = tensor.flatten_all()?.to_dtype(DType::F32)?;
+        let values = flat.to_vec1::<f32>()?;
+        let has_nan = values.iter().any(|v| v.is_nan());
+        let has_inf = values.iter().any(|v| v.is_infinite());
+        if has_nan || has_inf {
+            return Err(RagError::Other(format!(
+                "LoRA merge produced invalid values in tensor '{}': NaN={}, Inf={}",
+                name, has_nan, has_inf
+            )));
         }
     }
 

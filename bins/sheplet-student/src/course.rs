@@ -50,6 +50,7 @@ impl CourseManager {
         bundle_path: impl AsRef<Path>,
         base_dir: impl AsRef<Path>,
         trusted_fingerprint: &str,
+        no_adapter: bool,
     ) -> Result<String> {
         let bundle_path = bundle_path.as_ref();
         let base_dir = base_dir.as_ref();
@@ -87,13 +88,21 @@ impl CourseManager {
 
         // Auto-switch if this is the first/only course
         if is_first {
-            self.switch_course(&course_id).await?;
+            self.switch_course_inner(&course_id, no_adapter).await?;
         }
 
         Ok(course_id)
     }
 
     pub async fn switch_course(&mut self, course_id: &str) -> Result<()> {
+        self.switch_course_inner(course_id, false).await
+    }
+
+    pub async fn switch_course_no_adapter(&mut self, course_id: &str, no_adapter: bool) -> Result<()> {
+        self.switch_course_inner(course_id, no_adapter).await
+    }
+
+    async fn switch_course_inner(&mut self, course_id: &str, no_adapter: bool) -> Result<()> {
         // Move current active course back into known_courses before loading new one
         if let (Some(active), Some(active_id)) = (self.active.take(), self.active_id.take()) {
             self.known_courses.insert(active_id, active.metadata);
@@ -120,7 +129,10 @@ impl CourseManager {
         .await?;
 
         let adapter_path = course_dir.join("adapter.lora");
-        let adapter = if adapter_path.exists() {
+        let adapter = if no_adapter {
+            println!("[debug] --no-adapter flag set: skipping LoRA adapter, using base model only");
+            None
+        } else if adapter_path.exists() {
             Some(adapter_path.as_path())
         } else {
             None

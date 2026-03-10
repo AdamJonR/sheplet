@@ -31,6 +31,12 @@ pub struct Gemma3Config {
     pub query_pre_attn_scalar: usize,
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
+    #[serde(default)]
+    pub layer_types: Vec<String>,
+    #[serde(default)]
+    pub rope_local_base_freq: Option<f64>,
 }
 
 fn default_max_position_embeddings() -> usize {
@@ -84,12 +90,11 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Gemma3Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.head_dim;
-        let max_seq_len = cfg.max_position_embeddings;
+    fn new(dtype: DType, head_dim: usize, max_seq_len: usize, rope_theta: f64, dev: &Device) -> Result<Self> {
+        let dim = head_dim;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| 1f32 / rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -171,11 +176,12 @@ struct Attention {
     head_dim: usize,
     attn_logit_softcapping: Option<f64>,
     rotary_emb: Arc<RotaryEmbedding>,
+    sliding_window: Option<usize>,
     kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Gemma3Config, vb: VarBuilder) -> Result<Self> {
+    fn new(rotary_emb: Arc<RotaryEmbedding>, sliding_window: Option<usize>, cfg: &Gemma3Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -202,6 +208,7 @@ impl Attention {
             head_dim,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             rotary_emb,
+            sliding_window,
             kv_cache: None,
         })
     }
@@ -244,6 +251,23 @@ impl Attention {
                 (key_states, value_states)
             }
         };
+        // For sliding window layers, truncate KV cache to the window size.
+        // This ensures that during autoregressive generation (seq_len=1, no mask),
+        // the layer only attends to recent tokens.
+        let (key_states, value_states) = if let Some(w) = self.sliding_window {
+            let kv_len = key_states.dim(2)?;
+            if kv_len > w {
+                let start = kv_len - w;
+                (
+                    key_states.narrow(2, start, w)?.contiguous()?,
+                    value_states.narrow(2, start, w)?.contiguous()?,
+                )
+            } else {
+                (key_states, value_states)
+            }
+        } else {
+            (key_states, value_states)
+        };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
         let key_states = repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
@@ -282,11 +306,13 @@ struct DecoderLayer {
     post_attention_layernorm: RmsNorm,
     pre_feedforward_layernorm: RmsNorm,
     post_feedforward_layernorm: RmsNorm,
+    is_sliding: bool,
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Gemma3Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+    fn new(rotary_emb: Arc<RotaryEmbedding>, is_sliding: bool, sliding_window: Option<usize>, cfg: &Gemma3Config, vb: VarBuilder) -> Result<Self> {
+        let sw = if is_sliding { sliding_window } else { None };
+        let self_attn = Attention::new(rotary_emb, sw, cfg, vb.pp("self_attn"))?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -312,15 +338,18 @@ impl DecoderLayer {
             post_attention_layernorm,
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
+            is_sliding,
         })
     }
 
     fn forward(
         &mut self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        full_mask: Option<&Tensor>,
+        sliding_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        let attention_mask = if self.is_sliding { sliding_mask } else { full_mask };
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -343,6 +372,7 @@ pub struct Gemma3Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     final_logit_softcapping: Option<f64>,
+    sliding_window: Option<usize>,
     device: Device,
     dtype: DType,
     hidden_size: usize,
@@ -353,11 +383,30 @@ impl Gemma3Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+
+        // Create global RoPE (for full attention layers) and local RoPE (for sliding layers)
+        let rotary_global = Arc::new(RotaryEmbedding::new(
+            vb.dtype(), cfg.head_dim, cfg.max_position_embeddings, cfg.rope_theta, vb_m.device(),
+        )?);
+        let local_theta = cfg.rope_local_base_freq.unwrap_or(cfg.rope_theta);
+        let rotary_local = if (local_theta - cfg.rope_theta).abs() > 1e-6 {
+            Arc::new(RotaryEmbedding::new(
+                vb.dtype(), cfg.head_dim, cfg.max_position_embeddings, local_theta, vb_m.device(),
+            )?)
+        } else {
+            rotary_global.clone()
+        };
+
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let is_sliding = if cfg.layer_types.is_empty() {
+                false // no layer_types specified → treat all as full attention (backward compat)
+            } else {
+                cfg.layer_types.get(layer_idx).map(|s| s.as_str()) == Some("sliding_attention")
+            };
+            let rotary = if is_sliding { rotary_local.clone() } else { rotary_global.clone() };
+            let layer = DecoderLayer::new(rotary, is_sliding, cfg.sliding_window, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer);
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -366,6 +415,7 @@ impl Gemma3Model {
             layers,
             norm,
             final_logit_softcapping: cfg.final_logit_softcapping,
+            sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
@@ -377,35 +427,53 @@ impl Gemma3Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
+        sliding_window: Option<usize>,
     ) -> Result<Tensor> {
+        let total_len = tgt_len + seqlen_offset;
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
-                (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. })
+                let abs_i = i + seqlen_offset;
+                (0..total_len).map(move |j| {
+                    let is_future = j > abs_i;
+                    let is_outside_window = match sliding_window {
+                        Some(w) => j < abs_i.saturating_sub(w - 1),
+                        None => false,
+                    };
+                    if is_future || is_outside_window {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
             })
             .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        let mask = Tensor::from_slice(&mask, (tgt_len, total_len), &self.device)?;
+        mask.expand((b_size, 1, tgt_len, total_len))?
             .to_dtype(self.dtype)
+    }
+
+    /// Check if any layer uses sliding attention.
+    fn has_sliding_layers(&self) -> bool {
+        self.layers.iter().any(|l| l.is_sliding)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask = if seq_len <= 1 {
-            None
+        let (full_mask, sliding_mask) = if seq_len <= 1 {
+            (None, None)
         } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
-            Some(mask)
+            let full = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset, None)?;
+            let sliding = if self.has_sliding_layers() {
+                Some(self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset, self.sliding_window)?)
+            } else {
+                None
+            };
+            (Some(full), sliding)
         };
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
+            xs = layer.forward(&xs, full_mask.as_ref(), sliding_mask.as_ref(), seqlen_offset)?;
         }
         // Tied lm_head: reuse embed_tokens weight
         let logits = xs
@@ -456,5 +524,41 @@ mod tests {
         assert_eq!(config.num_key_value_heads, 1);
         assert!(config.attn_logit_softcapping.is_none());
         assert!(config.final_logit_softcapping.is_none());
+        // New fields should default when absent
+        assert!(config.sliding_window.is_none());
+        assert!(config.layer_types.is_empty());
+        assert!(config.rope_local_base_freq.is_none());
+    }
+
+    #[test]
+    fn test_gemma3_config_with_sliding_window() {
+        let json = r#"{
+            "vocab_size": 262144,
+            "hidden_size": 1536,
+            "intermediate_size": 6144,
+            "num_hidden_layers": 18,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 4,
+            "head_dim": 256,
+            "hidden_activation": "gelu_pytorch_tanh",
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 1000000.0,
+            "sliding_window": 512,
+            "rope_local_base_freq": 10000.0,
+            "layer_types": [
+                "sliding_attention","sliding_attention","sliding_attention",
+                "sliding_attention","sliding_attention","global_attention",
+                "sliding_attention","sliding_attention","sliding_attention",
+                "sliding_attention","sliding_attention","global_attention",
+                "sliding_attention","sliding_attention","sliding_attention",
+                "sliding_attention","sliding_attention","global_attention"
+            ]
+        }"#;
+        let config: Gemma3Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.sliding_window, Some(512));
+        assert_eq!(config.rope_local_base_freq, Some(10000.0));
+        assert_eq!(config.layer_types.len(), 18);
+        assert_eq!(config.layer_types[0], "sliding_attention");
+        assert_eq!(config.layer_types[5], "global_attention");
     }
 }

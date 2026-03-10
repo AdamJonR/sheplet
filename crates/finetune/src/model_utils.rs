@@ -89,6 +89,36 @@ pub fn prepare_decoder_attention_mask(
         .to_dtype(dtype)
 }
 
+/// Causal decoder attention mask with sliding window.
+/// Tokens can only attend to positions within the last `window` tokens.
+pub fn prepare_sliding_attention_mask(
+    b_size: usize,
+    tgt_len: usize,
+    seqlen_offset: usize,
+    window: usize,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let total_len = tgt_len + seqlen_offset;
+    let mask: Vec<_> = (0..tgt_len)
+        .flat_map(|i| {
+            let abs_i = i + seqlen_offset;
+            (0..total_len).map(move |j| {
+                let is_future = j > abs_i;
+                let is_outside_window = j < abs_i.saturating_sub(window - 1);
+                if is_future || is_outside_window {
+                    f32::NEG_INFINITY
+                } else {
+                    0.
+                }
+            })
+        })
+        .collect();
+    let mask = Tensor::from_slice(&mask, (tgt_len, total_len), device)?;
+    mask.expand((b_size, 1, tgt_len, total_len))?
+        .to_dtype(dtype)
+}
+
 /// Load tokenizer and SafeTensors files from a model directory.
 /// Returns `(tokenizer, sorted safetensors paths)`.
 pub fn load_model_files(

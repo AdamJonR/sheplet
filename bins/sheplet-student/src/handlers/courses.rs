@@ -37,7 +37,7 @@ async fn switch_course(
     Json(req): Json<SwitchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let mut courses = state.courses.write().await;
-    match courses.switch_course(&req.course_id).await {
+    match courses.switch_course_no_adapter(&req.course_id, state.no_adapter).await {
         Ok(()) => Ok(Json(serde_json::json!({
             "message": format!("Switched to course '{}'", req.course_id)
         }))),

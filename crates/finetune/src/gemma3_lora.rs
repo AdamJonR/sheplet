@@ -42,6 +42,12 @@ pub struct Gemma3Config {
     pub query_pre_attn_scalar: usize,
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
+    #[serde(default)]
+    pub layer_types: Vec<String>,
+    #[serde(default)]
+    pub rope_local_base_freq: Option<f64>,
 }
 
 fn default_max_position_embeddings() -> usize {
@@ -101,12 +107,14 @@ struct LoraAttention {
     head_dim: usize,
     attn_logit_softcapping: Option<f64>,
     rotary_emb: Arc<RotaryEmbedding>,
+    sliding_window: Option<usize>,
     kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl LoraAttention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
+        sliding_window: Option<usize>,
         cfg: &Gemma3Config,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
@@ -148,6 +156,7 @@ impl LoraAttention {
             q_norm,
             k_norm,
             rotary_emb,
+            sliding_window,
             kv_cache: None,
             num_heads,
             num_kv_heads,
@@ -205,6 +214,21 @@ impl LoraAttention {
                 let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
                 (key_states, value_states)
             }
+        };
+        // For sliding window layers, truncate KV cache to the window size.
+        let (key_states, value_states) = if let Some(w) = self.sliding_window {
+            let kv_len = key_states.dim(2)?;
+            if kv_len > w {
+                let start = kv_len - w;
+                (
+                    key_states.narrow(2, start, w)?.contiguous()?,
+                    value_states.narrow(2, start, w)?.contiguous()?,
+                )
+            } else {
+                (key_states, value_states)
+            }
+        } else {
+            (key_states, value_states)
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
@@ -276,18 +300,22 @@ struct DecoderLayer {
     post_attention_layernorm: GemmaRmsNorm,
     pre_feedforward_layernorm: GemmaRmsNorm,
     post_feedforward_layernorm: GemmaRmsNorm,
+    is_sliding: bool,
 }
 
 impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
+        is_sliding: bool,
+        sliding_window: Option<usize>,
         cfg: &Gemma3Config,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
     ) -> Result<Self> {
+        let sw = if is_sliding { sliding_window } else { None };
         let self_attn =
-            LoraAttention::new(rotary_emb, cfg, lora_cfg, vb.pp("self_attn"), device)?;
+            LoraAttention::new(rotary_emb, sw, cfg, lora_cfg, vb.pp("self_attn"), device)?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -313,16 +341,19 @@ impl DecoderLayer {
             post_attention_layernorm,
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
+            is_sliding,
         })
     }
 
     fn forward(
         &mut self,
         xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        full_mask: Option<&Tensor>,
+        sliding_mask: Option<&Tensor>,
         seqlen_offset: usize,
         use_lora: bool,
     ) -> Result<Tensor> {
+        let attention_mask = if self.is_sliding { sliding_mask } else { full_mask };
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self
@@ -350,6 +381,7 @@ pub struct Gemma3LoraModel {
     device: Device,
     dtype: DType,
     hidden_size: usize,
+    sliding_window: Option<usize>,
     final_logit_softcapping: Option<f64>,
 }
 
@@ -363,18 +395,39 @@ impl Gemma3LoraModel {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
+
+        // Create global RoPE (for full attention layers) and local RoPE (for sliding layers)
+        let rotary_global = Arc::new(RotaryEmbedding::new(
             vb.dtype(),
             cfg.head_dim,
             cfg.max_position_embeddings,
             cfg.rope_theta,
             vb_m.device(),
         )?);
+        let local_theta = cfg.rope_local_base_freq.unwrap_or(cfg.rope_theta);
+        let rotary_local = if (local_theta - cfg.rope_theta).abs() > 1e-6 {
+            Arc::new(RotaryEmbedding::new(
+                vb.dtype(),
+                cfg.head_dim,
+                cfg.max_position_embeddings,
+                local_theta,
+                vb_m.device(),
+            )?)
+        } else {
+            rotary_global.clone()
+        };
+
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
+            let is_sliding = if cfg.layer_types.is_empty() {
+                false
+            } else {
+                cfg.layer_types.get(layer_idx).map(|s| s.as_str()) == Some("sliding_attention")
+            };
+            let rotary = if is_sliding { rotary_local.clone() } else { rotary_global.clone() };
             let layer =
-                DecoderLayer::new(rotary_emb.clone(), cfg, lora_cfg, vb_l.pp(layer_idx), device)?;
+                DecoderLayer::new(rotary, is_sliding, cfg.sliding_window, cfg, lora_cfg, vb_l.pp(layer_idx), device)?;
             layers.push(layer);
         }
         let norm = GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -385,6 +438,7 @@ impl Gemma3LoraModel {
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
+            sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
         })
     }
@@ -418,6 +472,11 @@ impl Gemma3LoraModel {
         self.forward_inner(input_ids, seqlen_offset, Some(start_pos), false)
     }
 
+    /// Check if any layer uses sliding attention.
+    fn has_sliding_layers(&self) -> bool {
+        self.layers.iter().any(|l| l.is_sliding)
+    }
+
     /// `logits_from_pos`: `None` = last position only, `Some(pos)` = from position `pos` onwards.
     fn forward_inner(
         &mut self,
@@ -427,22 +486,35 @@ impl Gemma3LoraModel {
         use_lora: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask = if seq_len <= 1 {
-            None
+        let (full_mask, sliding_mask) = if seq_len <= 1 {
+            (None, None)
         } else {
-            Some(model_utils::prepare_decoder_attention_mask(
+            let full = model_utils::prepare_decoder_attention_mask(
                 b_size,
                 seq_len,
                 seqlen_offset,
                 &self.device,
                 self.dtype,
-            )?)
+            )?;
+            let sliding = if self.has_sliding_layers() {
+                Some(model_utils::prepare_sliding_attention_mask(
+                    b_size,
+                    seq_len,
+                    seqlen_offset,
+                    self.sliding_window.unwrap_or(512),
+                    &self.device,
+                    self.dtype,
+                )?)
+            } else {
+                None
+            };
+            (Some(full), sliding)
         };
         // Embed and scale by sqrt(hidden_size)
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset, use_lora)?;
+            xs = layer.forward(&xs, full_mask.as_ref(), sliding_mask.as_ref(), seqlen_offset, use_lora)?;
         }
         // Narrow hidden states before applying norm+lm_head to avoid wasted computation
         let xs = match logits_from_pos {
@@ -651,6 +723,10 @@ mod tests {
         assert_eq!(config.num_hidden_layers, 26);
         assert_eq!(config.vocab_size, 262144);
         assert_eq!(config.hidden_size, 1152);
+        // New fields should default when absent
+        assert!(config.sliding_window.is_none());
+        assert!(config.layer_types.is_empty());
+        assert!(config.rope_local_base_freq.is_none());
     }
 
     #[test]
@@ -679,6 +755,9 @@ mod tests {
             attn_logit_softcapping: None,
             query_pre_attn_scalar: head_dim,
             max_position_embeddings: 128,
+            sliding_window: None,
+            layer_types: vec![],
+            rope_local_base_freq: None,
         };
 
         let lora_cfg = LoraConfig {
@@ -756,7 +835,7 @@ mod tests {
                 Tensor::from_vec(vec![norm_val; head_dim], head_dim, &device).unwrap(),
             );
             let vb = VarBuilder::from_tensors(tensors, dtype, &device);
-            LoraAttention::new(rotary_emb.clone(), &cfg, &lora_cfg, vb, &device).unwrap()
+            LoraAttention::new(rotary_emb.clone(), None, &cfg, &lora_cfg, vb, &device).unwrap()
         };
 
         // norm weight=0 → GemmaRmsNorm scale = (0+1) = 1x

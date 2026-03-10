@@ -357,9 +357,9 @@ async fn chat_stream(
                 let (token_tx, token_rx) = std::sync::mpsc::channel::<rag::Result<String>>();
                 let max_tokens = req.max_tokens.unwrap_or(512);
                 let gen_clone = generator.clone();
-                tokio::task::spawn_blocking(move || {
+                let gen_handle = tokio::task::spawn_blocking(move || {
                     let mut locked = gen_clone.lock().unwrap();
-                    let _ = locked.generate_to_sender(&prompt, max_tokens, token_tx);
+                    locked.generate_to_sender(&prompt, max_tokens, token_tx)
                 });
 
                 let mut full_response = String::new();
@@ -376,6 +376,29 @@ async fn chat_stream(
                             break;
                         }
                     }
+                }
+
+                // Check if the generation task failed
+                match gen_handle.await {
+                    Ok(Err(e)) => {
+                        eprintln!("ERROR: generate_to_sender returned error: {e}");
+                        if full_response.is_empty() {
+                            let _ = tx.send(Ok(Event::default().event("error")
+                                .data(format!("Generation failed: {e}")))).await;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("ERROR: generation task panicked: {e}");
+                        if full_response.is_empty() {
+                            let _ = tx.send(Ok(Event::default().event("error")
+                                .data(format!("Generation task crashed: {e}")))).await;
+                        }
+                    }
+                    Ok(Ok(())) => {}
+                }
+
+                if full_response.is_empty() {
+                    eprintln!("WARNING: generation produced 0 tokens");
                 }
 
                 // Done event

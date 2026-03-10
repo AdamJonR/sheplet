@@ -50,7 +50,7 @@ async fn load_bundle(
 
     let mut courses = state.courses.write().await;
     match courses
-        .load_bundle(&req.path, &state.base_dir, &req.trusted_fingerprint)
+        .load_bundle(&req.path, &state.base_dir, &req.trusted_fingerprint, state.no_adapter)
         .await
     {
         Ok(course_id) => Ok(Json(LoadBundleResponse {
