@@ -251,27 +251,32 @@ impl Attention {
                 (key_states, value_states)
             }
         };
-        // For sliding window layers, truncate KV cache to the window size.
-        // This ensures that during autoregressive generation (seq_len=1, no mask),
-        // the layer only attends to recent tokens.
-        let (key_states, value_states) = if let Some(w) = self.sliding_window {
+        // For sliding window layers, manage KV truncation:
+        // - Prefill (mask present): mask handles windowing; use full K/V for attention, truncate only for cache
+        // - Autoregressive (no mask): truncate K/V for both attention and cache
+        let (key_for_attn, value_for_attn) = if let Some(w) = self.sliding_window {
             let kv_len = key_states.dim(2)?;
             if kv_len > w {
                 let start = kv_len - w;
-                (
-                    key_states.narrow(2, start, w)?.contiguous()?,
-                    value_states.narrow(2, start, w)?.contiguous()?,
-                )
+                let trunc_k = key_states.narrow(2, start, w)?.contiguous()?;
+                let trunc_v = value_states.narrow(2, start, w)?.contiguous()?;
+                self.kv_cache = Some((trunc_k.clone(), trunc_v.clone()));
+                if attention_mask.is_some() {
+                    (key_states, value_states)
+                } else {
+                    (trunc_k, trunc_v)
+                }
             } else {
+                self.kv_cache = Some((key_states.clone(), value_states.clone()));
                 (key_states, value_states)
             }
         } else {
+            self.kv_cache = Some((key_states.clone(), value_states.clone()));
             (key_states, value_states)
         };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        let key_states = repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
-        let value_states = repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
+        let key_states = repeat_kv(key_for_attn, self.num_kv_groups)?.contiguous()?;
+        let value_states = repeat_kv(value_for_attn, self.num_kv_groups)?.contiguous()?;
 
         let scale = 1f64 / f64::sqrt(self.head_dim as f64);
         let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
