@@ -3,57 +3,10 @@ use std::sync::mpsc;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::phi3;
 use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
 use crate::quantized_phi3;
-
-/// Local config struct that mirrors `phi3::Config` but accepts `rope_scaling` as any JSON value
-/// (phi-4-mini has it as a map with `long_factor`/`short_factor`, while phi-3 has it as a string).
-#[derive(Debug, Clone, serde::Deserialize)]
-struct Phi3InferenceConfig {
-    pub vocab_size: usize,
-    pub hidden_act: candle_nn::Activation,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    #[serde(default)]
-    pub bos_token_id: Option<u32>,
-    #[serde(default)]
-    pub eos_token_id: Option<u32>,
-    #[serde(default)]
-    pub rope_scaling: Option<serde_json::Value>,
-    pub max_position_embeddings: usize,
-    #[serde(default)]
-    pub tie_word_embeddings: bool,
-}
-
-impl From<Phi3InferenceConfig> for phi3::Config {
-    fn from(c: Phi3InferenceConfig) -> Self {
-        // candle's phi3 model ignores rope_scaling entirely — only rope_theta matters
-        let rope_scaling = c.rope_scaling.and_then(|v| v.as_str().map(String::from));
-        Self {
-            vocab_size: c.vocab_size,
-            hidden_act: c.hidden_act,
-            hidden_size: c.hidden_size,
-            intermediate_size: c.intermediate_size,
-            num_hidden_layers: c.num_hidden_layers,
-            num_attention_heads: c.num_attention_heads,
-            num_key_value_heads: c.num_key_value_heads,
-            rms_norm_eps: c.rms_norm_eps,
-            rope_theta: c.rope_theta,
-            bos_token_id: c.bos_token_id,
-            eos_token_id: c.eos_token_id,
-            rope_scaling,
-            max_position_embeddings: c.max_position_embeddings,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
@@ -114,7 +67,7 @@ pub trait TextGenerator: Send {
 }
 
 enum InferenceModel {
-    PhiFull(phi3::Model),
+    PhiFull(crate::phi3::Model),
     PhiQuantized(quantized_phi3::ModelWeights),
     Gemma3(crate::gemma3::Gemma3Model),
 }
@@ -216,10 +169,17 @@ impl PhiGenerator {
                     InferenceModel::Gemma3(model)
                 }
                 ModelArch::Phi3 => {
-                    let phi3_config: Phi3InferenceConfig =
+                    let config: crate::phi3::Config =
                         serde_json::from_str(&config_str)?;
-                    let tie_embeddings = phi3_config.tie_word_embeddings;
-                    let config: phi3::Config = phi3_config.into();
+
+                    eprintln!(
+                        "Phi3 config: hidden_size={}, head_dim={}, rope_dim={}, layers={}, \
+                         partial_rotary_factor={}, rope_scaling={}, tie_word_embeddings={}",
+                        config.hidden_size, config.head_dim(), config.rope_dim(),
+                        config.num_hidden_layers, config.partial_rotary_factor,
+                        if config.rope_scaling.is_some() { "longrope" } else { "none" },
+                        config.tie_word_embeddings,
+                    );
 
                     let dtype = DType::F32;
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
@@ -228,15 +188,15 @@ impl PhiGenerator {
                             adapter_path.unwrap(),
                             device,
                             dtype,
-                            tie_embeddings,
+                            false,
                         )?
                     } else {
-                        load_phi3_safetensors(
-                            &safetensors_files, tie_embeddings, device, dtype,
-                        )?
+                        unsafe {
+                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                        }
                     };
 
-                    let model = phi3::Model::new(&config, vb)?;
+                    let model = crate::phi3::Model::new(&config, vb)?;
                     InferenceModel::PhiFull(model)
                 }
             }
@@ -861,36 +821,16 @@ mod tests {
                 "short_factor": [1.0, 1.1, 1.2],
                 "type": "longrope"
             },
-            "max_position_embeddings": 131072
+            "max_position_embeddings": 131072,
+            "partial_rotary_factor": 0.75
         }"#;
-        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
-            .expect("should deserialize phi-4-mini config")
-            .into();
+        let config: crate::phi3::Config = serde_json::from_str(config_json)
+            .expect("should deserialize phi-4-mini config");
         assert_eq!(config.vocab_size, 200064);
         assert_eq!(config.num_hidden_layers, 32);
-        // rope_scaling map should be dropped (not a string)
-        assert!(config.rope_scaling.is_none());
-    }
-
-    #[test]
-    fn test_phi3_string_rope_scaling_preserved() {
-        let config_json = r#"{
-            "vocab_size": 32064,
-            "hidden_act": "silu",
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 32,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 10000.0,
-            "rope_scaling": "su",
-            "max_position_embeddings": 4096
-        }"#;
-        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
-            .expect("should deserialize phi-3 config")
-            .into();
-        assert_eq!(config.rope_scaling.as_deref(), Some("su"));
+        assert!(config.rope_scaling.is_some());
+        assert_eq!(config.rope_scaling.as_ref().unwrap().long_factor.len(), 3);
+        assert_eq!(config.rope_dim(), 96); // 128 * 0.75
     }
 
     #[test]
@@ -907,10 +847,11 @@ mod tests {
             "rope_theta": 10000.0,
             "max_position_embeddings": 4096
         }"#;
-        let config: phi3::Config = serde_json::from_str::<Phi3InferenceConfig>(config_json)
-            .expect("should deserialize config without rope_scaling")
-            .into();
+        let config: crate::phi3::Config = serde_json::from_str(config_json)
+            .expect("should deserialize config without rope_scaling");
         assert!(config.rope_scaling.is_none());
+        // Default partial_rotary_factor is 1.0, so rope_dim == head_dim
+        assert_eq!(config.rope_dim(), config.head_dim());
     }
 
     #[test]
@@ -928,7 +869,7 @@ mod tests {
             "tie_word_embeddings": true,
             "max_position_embeddings": 131072
         }"#;
-        let config: Phi3InferenceConfig = serde_json::from_str(config_json).unwrap();
+        let config: crate::phi3::Config = serde_json::from_str(config_json).unwrap();
         assert!(config.tie_word_embeddings);
     }
 
@@ -946,7 +887,7 @@ mod tests {
             "rope_theta": 10000.0,
             "max_position_embeddings": 4096
         }"#;
-        let config: Phi3InferenceConfig = serde_json::from_str(config_json).unwrap();
+        let config: crate::phi3::Config = serde_json::from_str(config_json).unwrap();
         assert!(!config.tie_word_embeddings);
     }
 
@@ -976,27 +917,6 @@ mod tests {
 
 /// Load safetensors into a HashMap, injecting `lm_head.weight` as an alias for
 /// `model.embed_tokens.weight` when `tie_word_embeddings` is true.
-fn load_phi3_safetensors(
-    safetensors_files: &[std::path::PathBuf],
-    tie_word_embeddings: bool,
-    device: &Device,
-    dtype: DType,
-) -> Result<VarBuilder<'static>> {
-    let mut tensors: std::collections::HashMap<String, Tensor> =
-        std::collections::HashMap::new();
-    for file in safetensors_files {
-        tensors.extend(candle_core::safetensors::load(file, device)?);
-    }
-    if tie_word_embeddings {
-        if let Some(embed) = tensors.get("model.embed_tokens.weight") {
-            let embed = embed.clone();
-            tensors.insert("lm_head.weight".to_string(), embed);
-            eprintln!("Tied embeddings: aliased lm_head.weight → model.embed_tokens.weight");
-        }
-    }
-    Ok(VarBuilder::from_tensors(tensors, dtype, device))
-}
-
 /// Merge LoRA adapter weights into base model weights.
 ///
 /// Loads all base safetensors into memory, applies LoRA deltas
@@ -1007,7 +927,7 @@ fn merge_lora_adapter(
     adapter_path: &Path,
     device: &Device,
     dtype: DType,
-    tie_word_embeddings: bool,
+    _tie_word_embeddings: bool,
 ) -> Result<VarBuilder<'static>> {
     // Load all base tensors into memory
     let mut base_tensors: std::collections::HashMap<String, Tensor> =
@@ -1015,15 +935,6 @@ fn merge_lora_adapter(
     for file in safetensors_files {
         let tensors = candle_core::safetensors::load(file, device)?;
         base_tensors.extend(tensors);
-    }
-
-    // Inject lm_head.weight alias when embeddings are tied
-    if tie_word_embeddings {
-        if let Some(embed) = base_tensors.get("model.embed_tokens.weight") {
-            let embed = embed.clone();
-            base_tensors.insert("lm_head.weight".to_string(), embed);
-            eprintln!("Tied embeddings: aliased lm_head.weight → model.embed_tokens.weight");
-        }
     }
 
     eprintln!(
