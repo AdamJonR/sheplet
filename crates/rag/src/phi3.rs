@@ -104,7 +104,9 @@ pub struct RotaryEmbedding {
 impl RotaryEmbedding {
     pub fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let rope_dim = cfg.rope_dim();
-        let max_seq_len = cfg.max_position_embeddings;
+        // For LongRoPE: use short_factor for sequences within original context length.
+        // Our inference never exceeds original_max_position_embeddings (4096).
+        let max_seq_len = cfg.original_max_position_embeddings;
 
         // Base inverse frequencies for rope_dim (not full head_dim)
         let mut inv_freq: Vec<f32> = (0..rope_dim)
@@ -112,9 +114,9 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / rope_dim as f64) as f32)
             .collect();
 
-        // Apply LongRoPE scaling factors
+        // Apply short_factor scaling (all 1.0 for Phi-4-mini, effectively a no-op)
         if let Some(ref scaling) = cfg.rope_scaling {
-            let factors = &scaling.long_factor;
+            let factors = &scaling.short_factor;
             for (i, freq) in inv_freq.iter_mut().enumerate() {
                 if i < factors.len() {
                     *freq /= factors[i] as f32;
@@ -129,9 +131,22 @@ impl RotaryEmbedding {
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
 
+        // Compute LongRoPE attention_factor scaling
+        let attention_factor = if cfg.rope_scaling.is_some() {
+            let factor = cfg.max_position_embeddings as f64
+                / cfg.original_max_position_embeddings as f64;
+            if factor <= 1.0 {
+                1.0
+            } else {
+                (1.0 + factor.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
+            }
+        } else {
+            1.0
+        };
+
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: (freqs.sin()? * attention_factor)?,
+            cos: (freqs.cos()? * attention_factor)?,
             rope_dim,
         })
     }
@@ -437,5 +452,133 @@ impl Model {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phi4_mini_config() -> Config {
+        Config {
+            vocab_size: 200064,
+            hidden_act: candle_nn::Activation::Silu,
+            hidden_size: 3072,
+            intermediate_size: 8192,
+            num_hidden_layers: 32,
+            num_attention_heads: 24,
+            num_key_value_heads: 8,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10000.0,
+            bos_token_id: Some(199999),
+            eos_token_id: Some(199999),
+            rope_scaling: Some(RopeScaling {
+                long_factor: vec![1.0; 48],  // 48 = rope_dim/2 = 96/2
+                short_factor: vec![1.0; 48],
+            }),
+            max_position_embeddings: 131072,
+            original_max_position_embeddings: 4096,
+            partial_rotary_factor: 0.75,
+            tie_word_embeddings: true,
+        }
+    }
+
+    #[test]
+    fn test_rotary_table_uses_original_max_position_embeddings() {
+        let cfg = phi4_mini_config();
+        let dev = Device::Cpu;
+        let rotary = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
+        // Table should be sized to original_max_position_embeddings (4096), not max_position_embeddings (131072)
+        let sin_shape = rotary.sin.dims();
+        assert_eq!(sin_shape[0], 4096, "sin table should have 4096 rows (original_max_position_embeddings)");
+        let cos_shape = rotary.cos.dims();
+        assert_eq!(cos_shape[0], 4096, "cos table should have 4096 rows (original_max_position_embeddings)");
+    }
+
+    #[test]
+    fn test_rotary_uses_short_factor_not_long_factor() {
+        // Create config where short_factor=1.0 and long_factor=50.0
+        // If long_factor were used, frequencies would be drastically different
+        let mut cfg = phi4_mini_config();
+        cfg.rope_scaling = Some(RopeScaling {
+            long_factor: vec![50.0; 48],
+            short_factor: vec![1.0; 48],
+        });
+        let dev = Device::Cpu;
+        let rotary_with_scaling = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
+
+        // Compare against no rope_scaling (vanilla RoPE)
+        let mut cfg_vanilla = cfg.clone();
+        cfg_vanilla.rope_scaling = None;
+        let rotary_vanilla = RotaryEmbedding::new(DType::F32, &cfg_vanilla, &dev).unwrap();
+
+        // With short_factor=1.0 + attention_factor, the base frequencies should match vanilla
+        // (only the attention_factor scaling differs). If long_factor=50.0 were used,
+        // the values would be completely different.
+        let cos_scaled = rotary_with_scaling.cos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let cos_vanilla = rotary_vanilla.cos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        // Compute expected attention_factor for this config
+        let factor = 131072.0_f64 / 4096.0_f64; // 32
+        let attention_factor = (1.0 + factor.ln() / 4096.0_f64.ln()).sqrt();
+
+        // cos_scaled should equal cos_vanilla * attention_factor (within float tolerance)
+        for (i, (scaled, vanilla)) in cos_scaled.iter().zip(cos_vanilla.iter()).enumerate().take(100) {
+            let expected = *vanilla as f64 * attention_factor;
+            let diff = (*scaled as f64 - expected).abs();
+            assert!(diff < 1e-5, "cos mismatch at index {i}: scaled={scaled}, expected={expected}");
+        }
+    }
+
+    #[test]
+    fn test_rotary_attention_factor_applied() {
+        let cfg = phi4_mini_config();
+        let dev = Device::Cpu;
+        let rotary = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
+
+        // For position 0, cos should be attention_factor * 1.0 (since cos(0)=1)
+        let cos_row0 = rotary.cos.get(0).unwrap().to_vec1::<f32>().unwrap();
+        let factor = 131072.0_f64 / 4096.0_f64;
+        let attention_factor = (1.0 + factor.ln() / 4096.0_f64.ln()).sqrt();
+
+        // All cos values at position 0 should be attention_factor (cos(0)=1)
+        for (i, val) in cos_row0.iter().enumerate() {
+            let diff = (*val as f64 - attention_factor).abs();
+            assert!(diff < 1e-5, "cos[0][{i}] = {val}, expected {attention_factor}");
+        }
+
+        // sin at position 0 should be 0 * attention_factor = 0
+        let sin_row0 = rotary.sin.get(0).unwrap().to_vec1::<f32>().unwrap();
+        for (i, val) in sin_row0.iter().enumerate() {
+            assert!(val.abs() < 1e-6, "sin[0][{i}] = {val}, expected ~0");
+        }
+    }
+
+    #[test]
+    fn test_rotary_no_scaling_when_no_rope_config() {
+        let mut cfg = phi4_mini_config();
+        cfg.rope_scaling = None;
+        cfg.max_position_embeddings = 4096;
+        let dev = Device::Cpu;
+        let rotary = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
+
+        // Without rope_scaling, attention_factor=1.0, so cos[0] should be exactly 1.0
+        let cos_row0 = rotary.cos.get(0).unwrap().to_vec1::<f32>().unwrap();
+        for (i, val) in cos_row0.iter().enumerate() {
+            let diff = (*val - 1.0).abs();
+            assert!(diff < 1e-6, "cos[0][{i}] = {val}, expected 1.0 (no scaling)");
+        }
+    }
+
+    #[test]
+    fn test_rotary_partial_rotary_dim() {
+        let cfg = phi4_mini_config();
+        let dev = Device::Cpu;
+        let rotary = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
+        // head_dim = 3072/24 = 128, partial_rotary_factor = 0.75, rope_dim = 96
+        assert_eq!(rotary.rope_dim, 96);
+        // cos/sin should have rope_dim/2 = 48 columns
+        assert_eq!(rotary.cos.dims()[1], 48);
+        assert_eq!(rotary.sin.dims()[1], 48);
     }
 }
