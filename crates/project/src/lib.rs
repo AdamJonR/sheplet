@@ -137,19 +137,75 @@ pub fn local_model_source(name: &str) -> Option<&'static str> {
     match name {
         "gemma270m" => Some("gemma-3-transformers-gemma-3-270m-it-v1"),
         "gemma1b" => Some("gemma-3-transformers-gemma-3-1b-it-v1"),
+        "llama-3.2-1b" | "llama1b" => Some("meta-llama--Llama-3.2-1B-Instruct"),
+        "llama-3.2-3b" | "llama3b" => Some("meta-llama--Llama-3.2-3B-Instruct"),
         _ => None,
     }
 }
 
 /// Copy model files from a local directory into the project model dir.
+///
+/// Handles both single-file weights (`model.safetensors`) and sharded weights
+/// (`model.safetensors.index.json` + shard files).
 pub fn copy_local_model(src_dir: &Path, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)?;
-    for filename in &["config.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors"] {
+
+    // Required files
+    for filename in &["config.json", "tokenizer.json"] {
         let src = src_dir.join(filename);
         let dest = dest_dir.join(filename);
         std::fs::copy(&src, &dest)
-            .with_context(|| format!("failed to copy {} from {}", filename, src_dir.display()))?;
+            .with_context(|| format!("required file {} not found in {}", filename, src_dir.display()))?;
     }
+
+    // Optional metadata files
+    for filename in &["tokenizer_config.json", "generation_config.json"] {
+        let src = src_dir.join(filename);
+        if src.exists() {
+            std::fs::copy(&src, dest_dir.join(filename))?;
+        }
+    }
+
+    // Weights: single file or sharded
+    let single = src_dir.join("model.safetensors");
+    let index = src_dir.join("model.safetensors.index.json");
+
+    if single.exists() {
+        std::fs::copy(&single, dest_dir.join("model.safetensors"))
+            .context("failed to copy model.safetensors")?;
+    } else if index.exists() {
+        // Copy index file
+        std::fs::copy(&index, dest_dir.join("model.safetensors.index.json"))
+            .context("failed to copy model.safetensors.index.json")?;
+
+        // Parse index to find shard filenames
+        let index_content = std::fs::read_to_string(&index)?;
+        let index_json: serde_json::Value = serde_json::from_str(&index_content)?;
+        let weight_map = index_json
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .context("model.safetensors.index.json missing weight_map")?;
+
+        // Collect unique shard filenames
+        let mut shards: Vec<String> = weight_map
+            .values()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        shards.sort();
+        shards.dedup();
+
+        for shard in &shards {
+            let src = src_dir.join(shard);
+            std::fs::copy(&src, dest_dir.join(shard))
+                .with_context(|| format!("failed to copy shard {}", shard))?;
+        }
+    } else {
+        bail!(
+            "no model weights found in {} — expected model.safetensors or model.safetensors.index.json",
+            src_dir.display()
+        );
+    }
+
     Ok(())
 }
 
@@ -158,6 +214,15 @@ pub fn copy_local_model(src_dir: &Path, dest_dir: &Path) -> Result<()> {
 /// Checks known shortcut names and HF repo ID patterns containing "gemma".
 pub fn is_gemma_model(name: &str) -> bool {
     matches!(name, "gemma270m" | "gemma1b" | "gemma-3-1b-it") || name.contains("/gemma")
+}
+
+/// Returns true if the model name refers to a Llama architecture.
+///
+/// Checks known shortcut names and HF repo ID patterns containing "llama" or "Llama".
+pub fn is_llama_model(name: &str) -> bool {
+    matches!(name, "llama-3.2-1b" | "llama1b" | "llama-3.2-3b" | "llama3b")
+        || name.contains("/Llama")
+        || name.contains("/llama")
 }
 
 /// Generate a Unix timestamp (seconds since epoch) as a string.
