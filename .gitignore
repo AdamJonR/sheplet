@@ -3,4 +3,5 @@
 *.sheplet
 test-project/
 test-student-data/
+test-qa/
 downloaded-models/

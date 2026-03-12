@@ -36,6 +36,8 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
         let repo_id = match name {
             "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
             "gemma-3-1b-it" => "google/gemma-3-1b-it",
+            "llama-3.2-1b" => "meta-llama/Llama-3.2-1B-Instruct",
+            "llama-3.2-3b" => "meta-llama/Llama-3.2-3B-Instruct",
             other => other,
         };
 

@@ -221,7 +221,7 @@ run_instructor_pipeline() {
     # Model
     echo "  [model] quantization=$quantization"
     step_start=$SECONDS
-    "$INSTRUCTOR" model --name "phi-4-mini-instruct" --quantization "$quantization" --project "$project_dir"
+    "$INSTRUCTOR" model --name "llama-3.2-1b" --quantization "$quantization" --project "$project_dir"
     local time_model=$(( SECONDS - step_start ))
     echo "    model: ${time_model}s"
 
@@ -486,7 +486,7 @@ for i in "${!RESULT_LABELS[@]}"; do
     # Show relevant stderr excerpts (filter out noise, keep diagnostics)
     if [ -n "${RESULT_STDERRS[$i]}" ]; then
         # Extract lines with useful diagnostics
-        local_stderr=$(echo "${RESULT_STDERRS[$i]}" | grep -iE "(eos|error|warn|model|lora|adapter|quantiz|loaded|config)" || true)
+        local_stderr=$(echo "${RESULT_STDERRS[$i]}" | grep -iE "(eos|error|warn|model|lora|adapter|quantiz|loaded|config|logit|token|top-5|WARNING|debug|dtype|device)" || true)
         if [ -n "$local_stderr" ]; then
             echo "  Diagnostics:"
             echo "$local_stderr" | head -20 | sed 's/^/    /'

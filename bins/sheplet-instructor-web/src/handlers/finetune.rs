@@ -145,6 +145,7 @@ fn run_finetune(
         let arch_name = match arch {
             rag::ModelArch::Phi3 => "Phi-3",
             rag::ModelArch::Gemma3 => "Gemma 3",
+            rag::ModelArch::Llama => "Llama 3.2",
         };
 
         let mut trainer: Box<dyn finetune::LoraTrainable> = match arch {
@@ -153,6 +154,9 @@ fn run_finetune(
             ),
             rag::ModelArch::Gemma3 => Box::new(
                 finetune::Gemma3LoraTrainer::new(&dirs.model, &lora_config, &device)?,
+            ),
+            rag::ModelArch::Llama => Box::new(
+                finetune::LlamaLoraTrainer::new(&dirs.model, &lora_config, &device)?,
             ),
         };
         let _ = tx.send(TaskEvent::StepCompleted {

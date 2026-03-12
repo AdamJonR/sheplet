@@ -66,6 +66,7 @@ pub fn run(
         let arch_name = match arch {
             rag::ModelArch::Phi3 => "Phi-3",
             rag::ModelArch::Gemma3 => "Gemma 3",
+            rag::ModelArch::Llama => "Llama 3.2",
         };
         let pb = progress::spinner(&format!("Loading {arch_name} model with LoRA layers..."));
 
@@ -76,6 +77,10 @@ pub fn run(
             ),
             rag::ModelArch::Gemma3 => Box::new(
                 finetune::Gemma3LoraTrainer::new(&dirs.model, &lora_config, &device)
+                    .context("failed to load model for training")?,
+            ),
+            rag::ModelArch::Llama => Box::new(
+                finetune::LlamaLoraTrainer::new(&dirs.model, &lora_config, &device)
                     .context("failed to load model for training")?,
             ),
         };
