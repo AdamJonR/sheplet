@@ -1,5 +1,6 @@
+use candle_core::backprop::GradStore;
 use candle_core::{DType, Device, Tensor, Var};
-use candle_nn::optim::{Optimizer, SGD};
+use candle_nn::optim::{AdamW, Optimizer};
 use serde::{Deserialize, Serialize};
 
 use crate::data::DpoExample;
@@ -18,9 +19,9 @@ pub struct DpoConfig {
 impl Default for DpoConfig {
     fn default() -> Self {
         Self {
-            beta: 0.1,
-            learning_rate: 5e-5,
-            epochs: 1,
+            beta: 0.3,
+            learning_rate: 1e-5,
+            epochs: 3,
             max_seq_len: 512,
         }
     }
@@ -58,14 +59,14 @@ pub fn train_dpo(
 
     let mut final_loss = 0.0;
 
+    let var_a = Var::from_tensor(&lora.lora_a().clone())?;
+    let var_b = Var::from_tensor(&lora.lora_b().clone())?;
+
+    let vars = vec![var_a.clone(), var_b.clone()];
+    let mut optimizer = AdamW::new_lr(vars.clone(), config.learning_rate)
+        .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
+
     for _epoch in 0..config.epochs {
-        let var_a = Var::from_tensor(&lora.lora_a().clone())?;
-        let var_b = Var::from_tensor(&lora.lora_b().clone())?;
-
-        let vars = vec![var_a.clone(), var_b.clone()];
-        let mut sgd = SGD::new(vars.clone(), config.learning_rate)
-            .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
-
         for example in data {
             // Tokenize chosen and rejected sequences
             let prompt_tokens = tokenize
@@ -160,15 +161,18 @@ pub fn train_dpo(
                 log_pi_chosen, log_ref_chosen, log_pi_rejected, log_ref_rejected, config.beta,
             )?;
 
-            sgd.backward_step(&loss)
-                .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
+            let mut grads = loss.backward()
+                .map_err(|e| FinetuneError::Training(format!("backward failed: {e}")))?;
+            clip_grad_norm(&vars, &mut grads, 1.0)?;
+            optimizer.step(&grads)
+                .map_err(|e| FinetuneError::Training(format!("optimizer step failed: {e}")))?;
 
             final_loss = loss.to_scalar::<f32>()? as f64;
         }
-
-        lora.set_lora_a(var_a.as_tensor().clone());
-        lora.set_lora_b(var_b.as_tensor().clone());
     }
+
+    lora.set_lora_a(var_a.as_tensor().clone());
+    lora.set_lora_b(var_b.as_tensor().clone());
 
     Ok(final_loss)
 }
@@ -191,7 +195,34 @@ fn dpo_loss(
     Ok((one + neg_scaled.exp()?)?.log()?)
 }
 
-/// Compute sum of log-probabilities for target tokens from logits.
+/// Clip gradients by global L2 norm. Returns the original (unclipped) norm.
+fn clip_grad_norm(
+    vars: &[Var],
+    grads: &mut GradStore,
+    max_norm: f64,
+) -> Result<f64, FinetuneError> {
+    let mut total_norm_sq = 0.0f64;
+    for var in vars {
+        if let Some(grad) = grads.get(var.as_tensor()) {
+            let norm_sq = grad.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+            total_norm_sq += norm_sq;
+        }
+    }
+    let total_norm = total_norm_sq.sqrt();
+
+    if total_norm > max_norm {
+        let scale = max_norm / total_norm;
+        for var in vars {
+            if let Some(grad) = grads.remove(var.as_tensor()) {
+                let clipped = (grad * scale)?;
+                grads.insert(var.as_tensor(), clipped);
+            }
+        }
+    }
+    Ok(total_norm)
+}
+
+/// Compute average of log-probabilities for target tokens from logits.
 /// logits: [seq_len, vocab_size], targets: Vec<u32> of length seq_len
 fn gather_log_probs(
     logits: &Tensor,
@@ -206,8 +237,8 @@ fn gather_log_probs(
         .to_dtype(DType::U32)?;
 
     let gathered = log_probs.gather(&target_tensor, 1)?;
-    let sum = gathered.sum_all()?;
-    Ok(sum)
+    let avg = gathered.mean_all()?;
+    Ok(avg)
 }
 
 /// DPO training using a full LoRA model with real tokenization and forward passes.
@@ -229,21 +260,21 @@ pub fn train_dpo_full(
     let device = trainer.device().clone();
     let mut final_loss = 0.0;
 
+    // Create Vars from LoRA tensors for gradient tracking
+    let lora_tensors = trainer.lora_tensors();
+    let vars: Vec<Var> = lora_tensors
+        .iter()
+        .map(|t| Var::from_tensor(t))
+        .collect::<candle_core::Result<Vec<_>>>()?;
+
+    // Set var-backed tensors into model so forward passes use tracked tensors
+    let var_tensors: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
+    trainer.set_lora_tensors(&var_tensors);
+
+    let mut optimizer = AdamW::new_lr(vars.clone(), config.learning_rate)
+        .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
+
     for _epoch in 0..config.epochs {
-        // Create Vars from LoRA tensors for gradient tracking
-        let lora_tensors = trainer.lora_tensors();
-        let vars: Vec<Var> = lora_tensors
-            .iter()
-            .map(|t| Var::from_tensor(t))
-            .collect::<candle_core::Result<Vec<_>>>()?;
-
-        // Set var-backed tensors into model so forward passes use tracked tensors
-        let var_tensors: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
-        trainer.set_lora_tensors(&var_tensors);
-
-        let mut sgd = SGD::new(vars.clone(), config.learning_rate)
-            .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
-
         for example in data {
             // Tokenize prompt+chosen and prompt+rejected
             let chosen_text = format!("{}{}", example.prompt, example.chosen);
@@ -336,8 +367,11 @@ pub fn train_dpo_full(
                 log_pi_chosen, log_ref_chosen, log_pi_rejected, log_ref_rejected, config.beta,
             )?;
 
-            sgd.backward_step(&loss)
-                .map_err(|e| FinetuneError::Training(format!("backward step failed: {e}")))?;
+            let mut grads = loss.backward()
+                .map_err(|e| FinetuneError::Training(format!("backward failed: {e}")))?;
+            clip_grad_norm(&vars, &mut grads, 1.0)?;
+            optimizer.step(&grads)
+                .map_err(|e| FinetuneError::Training(format!("optimizer step failed: {e}")))?;
 
             // Propagate updated tensors back into the model for next forward pass
             let updated: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();

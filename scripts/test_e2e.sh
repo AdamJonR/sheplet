@@ -137,6 +137,33 @@ isotonic solution, there is no net movement of water.
 Lysosomes are membrane-bound organelles containing digestive enzymes that break down waste
 materials, cellular debris, and foreign invaders. They maintain an acidic internal pH of
 about 4.5-5.0, which is optimal for their hydrolytic enzymes.
+
+The cytoskeleton is a network of protein filaments that provides structural support, aids in
+cell movement, and plays a role in intracellular transport. It consists of three main types
+of filaments: microfilaments (actin filaments), intermediate filaments, and microtubules.
+Microfilaments are the thinnest, made of actin, and are involved in muscle contraction, cell
+division, and cell shape. Microtubules are the thickest, made of tubulin, and form the
+mitotic spindle during cell division, as well as the structural core of cilia and flagella.
+
+Cell division occurs through two main processes: mitosis and meiosis. Mitosis produces two
+genetically identical daughter cells and is used for growth and repair. It consists of
+prophase, metaphase, anaphase, and telophase, followed by cytokinesis. During prophase,
+chromatin condenses into visible chromosomes and the mitotic spindle begins to form. In
+metaphase, chromosomes align at the cell's equator. During anaphase, sister chromatids
+separate and move to opposite poles. In telophase, nuclear envelopes reform around each set
+of chromosomes.
+
+Meiosis is a specialized form of cell division that produces four genetically unique haploid
+cells (gametes). It involves two rounds of division: meiosis I (reductional division) and
+meiosis II (equational division). Crossing over occurs during prophase I, where homologous
+chromosomes exchange genetic material, increasing genetic diversity. This is a key source
+of genetic variation in sexually reproducing organisms.
+
+Active transport requires energy (ATP) to move substances against their concentration
+gradient. The sodium-potassium pump (Na+/K+ ATPase) is a well-known example, pumping 3
+sodium ions out of the cell and 2 potassium ions into the cell per ATP molecule hydrolyzed.
+This pump is essential for maintaining the cell's resting membrane potential and is critical
+for nerve impulse transmission.
 CELL_EOF
 
 cat > "$TEST_DIR/sources/genetics_basics.txt" << 'GENETICS_EOF'
@@ -196,7 +223,128 @@ Mutations are changes in the DNA sequence that can occur spontaneously or be ind
 mutagens. Point mutations affect a single nucleotide, while chromosomal mutations affect
 larger segments of DNA. Mutations can be silent (no effect), missense (different amino acid),
 or nonsense (premature stop codon).
+
+Epigenetics refers to heritable changes in gene expression that do not involve changes to the
+DNA sequence itself. Key epigenetic mechanisms include DNA methylation, where methyl groups are
+added to cytosine bases (often at CpG dinucleotides), typically silencing gene expression.
+Histone modification is another mechanism, where chemical groups (acetyl, methyl, phosphate)
+are added to histone tails, altering chromatin structure and gene accessibility. Acetylation
+generally promotes gene expression by loosening chromatin, while methylation can either
+activate or repress genes depending on the specific residue modified.
+
+Genetic linkage occurs when genes are located close together on the same chromosome and tend
+to be inherited together. The frequency of recombination between linked genes depends on
+their physical distance on the chromosome, measured in centimorgans (cM). Thomas Hunt Morgan
+demonstrated linkage using Drosophila (fruit flies), showing that some traits did not assort
+independently as predicted by Mendel's second law.
+
+Polymerase chain reaction (PCR) is a laboratory technique used to amplify specific DNA
+sequences. It involves repeated cycles of denaturation (separating DNA strands at ~95°C),
+annealing (primers binding at ~55-65°C), and extension (DNA polymerase synthesizing new
+strands at ~72°C). PCR can produce millions of copies of a target sequence from a tiny
+amount of starting material and is widely used in diagnostics, forensics, and research.
 GENETICS_EOF
+
+cat > "$TEST_DIR/sources/ecology_basics.txt" << 'ECOLOGY_EOF'
+Fundamentals of Ecology
+
+Ecology is the scientific study of the interactions between organisms and their environment.
+It encompasses the study of individuals, populations, communities, ecosystems, and the
+biosphere. The term was coined by Ernst Haeckel in 1866, derived from the Greek words
+"oikos" (house) and "logos" (study).
+
+A population is a group of individuals of the same species living in a particular area at a
+given time. Population ecology studies factors that affect population size and growth,
+including birth rates, death rates, immigration, and emigration. Population growth can follow
+two main models: exponential growth (J-shaped curve) occurs when resources are unlimited,
+described by dN/dt = rN, where r is the intrinsic rate of increase. Logistic growth (S-shaped
+curve) occurs when resources are limited, described by dN/dt = rN(1 - N/K), where K is the
+carrying capacity of the environment.
+
+A community consists of all the populations of different species living and interacting in a
+particular area. Species interactions include competition (both interspecific and
+intraspecific), predation, mutualism, commensalism, and parasitism. The competitive exclusion
+principle (Gause's principle) states that two species competing for the same limited resource
+cannot coexist indefinitely — one will outcompete the other.
+
+An ecosystem includes all the living organisms (biotic factors) and non-living components
+(abiotic factors) in a given area, along with their interactions. Energy flows through
+ecosystems in one direction: from the sun to producers (autotrophs) to consumers
+(heterotrophs) to decomposers. Only about 10% of energy is transferred from one trophic
+level to the next (the 10% rule), with the rest lost as heat through cellular respiration.
+
+Biogeochemical cycles describe the movement of chemical elements through the biotic and
+abiotic components of ecosystems. The carbon cycle involves photosynthesis (removing CO2 from
+the atmosphere), cellular respiration (releasing CO2), decomposition, and combustion of fossil
+fuels. The nitrogen cycle includes nitrogen fixation (converting N2 to NH3 by bacteria),
+nitrification (NH3 to NO3-), assimilation by plants, and denitrification (NO3- back to N2).
+
+Ecological succession is the process of change in the species structure of an ecological
+community over time. Primary succession occurs on bare surfaces where no soil exists (e.g.,
+after a volcanic eruption), beginning with pioneer species like lichens. Secondary succession
+occurs in areas where a community has been disturbed but soil remains (e.g., after a fire).
+Both types progress toward a climax community, a relatively stable end stage.
+
+Biodiversity refers to the variety of life at all levels — genetic diversity within species,
+species diversity within communities, and ecosystem diversity across landscapes. Biodiversity
+is critical for ecosystem stability and resilience. Threats to biodiversity include habitat
+destruction, invasive species, pollution, overexploitation, and climate change (collectively
+known by the acronym HIPPO).
+ECOLOGY_EOF
+
+cat > "$TEST_DIR/sources/evolution_basics.txt" << 'EVOLUTION_EOF'
+Fundamentals of Evolution
+
+Evolution is the change in the inherited characteristics of biological populations over
+successive generations. Charles Darwin and Alfred Russel Wallace independently developed the
+theory of evolution by natural selection, which Darwin published in "On the Origin of Species"
+in 1859.
+
+Natural selection is the primary mechanism of evolution. It requires four conditions:
+variation (individuals in a population differ in their traits), heritability (some of that
+variation is genetic and can be passed to offspring), differential reproduction (individuals
+with certain traits produce more offspring), and adaptation (over generations, favorable
+traits become more common in the population). Natural selection acts on phenotypes, but
+evolution occurs through changes in allele frequencies in the gene pool.
+
+The Hardy-Weinberg principle describes the conditions under which allele frequencies in a
+population remain constant across generations. The equation p² + 2pq + q² = 1 predicts
+genotype frequencies, where p and q are the frequencies of two alleles. The five conditions
+for Hardy-Weinberg equilibrium are: no mutation, random mating, no natural selection, large
+population size (no genetic drift), and no gene flow. Any deviation from these conditions
+causes evolution.
+
+Genetic drift is the random change in allele frequencies due to chance events, especially
+significant in small populations. Two special cases are the bottleneck effect (a drastic
+reduction in population size due to a catastrophic event) and the founder effect (a small
+group establishes a new population with different allele frequencies than the original).
+
+Speciation is the formation of new species. Allopatric speciation occurs when populations
+are geographically separated by a physical barrier (e.g., a mountain range or river),
+preventing gene flow. Over time, the isolated populations diverge genetically and may become
+reproductively isolated. Sympatric speciation occurs without geographic separation, often
+through polyploidy (common in plants) or ecological specialization.
+
+Evidence for evolution comes from multiple sources: the fossil record shows transitional
+forms and patterns of change over time; comparative anatomy reveals homologous structures
+(similar structures in different species due to common ancestry, e.g., the pentadactyl limb)
+and analogous structures (similar function but different origin, e.g., bird and insect wings);
+molecular biology shows that all life shares the same genetic code (DNA/RNA) and that more
+closely related species have more similar DNA sequences; biogeography shows that species
+distribution patterns reflect evolutionary history.
+
+Phylogenetics is the study of evolutionary relationships among organisms. Phylogenetic trees
+(cladograms) are diagrams that show the inferred evolutionary relationships based on shared
+derived characteristics (synapomorphies). Molecular phylogenetics uses DNA or protein sequence
+comparisons to reconstruct evolutionary history, often using the molecular clock hypothesis,
+which assumes that genetic mutations accumulate at a roughly constant rate over time.
+
+Coevolution occurs when two or more species reciprocally affect each other's evolution.
+Examples include predator-prey arms races (e.g., rough-skinned newts producing increasingly
+potent tetrodotoxin and garter snakes evolving resistance), plant-pollinator relationships
+(e.g., flowers evolving shapes and colors that attract specific pollinators), and host-parasite
+interactions. Coevolution can drive rapid diversification and specialization.
+EVOLUTION_EOF
 
 echo "Created test documents in $TEST_DIR/sources/"
 
@@ -244,14 +392,34 @@ cat > "$TEST_DIR/dpo_data.jsonl" << 'DPO_EOF'
 {"prompt":"What are the types of mutations?","chosen":"Mutations are changes in the DNA sequence that can be spontaneous or induced by mutagens. Point mutations affect a single nucleotide, while chromosomal mutations affect larger segments. They can be silent, missense (different amino acid), or nonsense (premature stop codon).","rejected":"Mutations only happen when organisms are exposed to radiation and always cause cancer."}
 {"prompt":"What happens to a cell in a hypertonic solution?","chosen":"In a hypertonic solution, water moves out of the cell by osmosis, causing the cell to shrink — a process called crenation. This occurs because the solute concentration is higher outside the cell, drawing water out across the selectively permeable membrane.","rejected":"In a hypertonic solution, the cell absorbs extra water and grows larger until it divides."}
 {"prompt":"What is the endosymbiotic theory?","chosen":"The endosymbiotic theory proposes that mitochondria (and chloroplasts) were once free-living prokaryotes that were engulfed by ancestral eukaryotic cells. Evidence includes the fact that mitochondria contain their own DNA and have a double membrane structure.","rejected":"The endosymbiotic theory states that all cells evolved from viruses that merged together."}
+{"prompt":"What is the cytoskeleton?","chosen":"The cytoskeleton is a network of protein filaments that provides structural support, aids in cell movement, and plays a role in intracellular transport. It consists of microfilaments (actin), intermediate filaments, and microtubules (tubulin).","rejected":"The cytoskeleton is the cell wall found in all cells that keeps them rigid and prevents any movement."}
+{"prompt":"Describe the stages of mitosis.","chosen":"Mitosis consists of prophase (chromatin condenses into chromosomes, spindle forms), metaphase (chromosomes align at the equator), anaphase (sister chromatids separate to opposite poles), and telophase (nuclear envelopes reform), followed by cytokinesis.","rejected":"Mitosis has only two stages: the cell splits in half and then each half grows back to full size."}
+{"prompt":"How does meiosis differ from mitosis?","chosen":"Meiosis produces four genetically unique haploid cells through two rounds of division (meiosis I and II), while mitosis produces two genetically identical diploid cells. Crossing over during prophase I of meiosis increases genetic diversity.","rejected":"Meiosis and mitosis are the same process with different names used for different organisms."}
+{"prompt":"What is active transport?","chosen":"Active transport requires energy (ATP) to move substances against their concentration gradient. A key example is the sodium-potassium pump, which pumps 3 Na+ ions out and 2 K+ ions in per ATP molecule, maintaining the cell's resting membrane potential.","rejected":"Active transport is when molecules move freely through the membrane without any energy required."}
+{"prompt":"What is epigenetics?","chosen":"Epigenetics refers to heritable changes in gene expression that do not involve changes to the DNA sequence. Key mechanisms include DNA methylation (adding methyl groups to cytosine, typically silencing genes) and histone modification (altering chromatin structure and gene accessibility).","rejected":"Epigenetics is the study of how genes mutate and change their DNA sequence over a person's lifetime."}
+{"prompt":"What is genetic linkage?","chosen":"Genetic linkage occurs when genes are located close together on the same chromosome and tend to be inherited together. The recombination frequency between linked genes depends on their physical distance, measured in centimorgans. Thomas Hunt Morgan demonstrated this using Drosophila.","rejected":"Genetic linkage means all genes on the same chromosome are always inherited as an identical block with no variation."}
+{"prompt":"How does PCR work?","chosen":"PCR amplifies specific DNA sequences through repeated cycles of denaturation (separating strands at ~95°C), annealing (primers binding at ~55-65°C), and extension (DNA polymerase synthesizing new strands at ~72°C). It can produce millions of copies from a tiny starting amount.","rejected":"PCR is a chemical reaction that creates entirely new DNA sequences that don't exist in the original sample."}
+{"prompt":"What is a population in ecology?","chosen":"A population is a group of individuals of the same species living in a particular area at a given time. Population growth can follow exponential growth (unlimited resources, dN/dt = rN) or logistic growth (limited resources, dN/dt = rN(1-N/K), where K is carrying capacity).","rejected":"A population is any random collection of different species found anywhere on Earth at any time."}
+{"prompt":"What is the competitive exclusion principle?","chosen":"The competitive exclusion principle (Gause's principle) states that two species competing for the same limited resource cannot coexist indefinitely — one will outcompete and exclude the other. This drives niche differentiation among coexisting species.","rejected":"The competitive exclusion principle states that all species in an ecosystem must cooperate equally to survive."}
+{"prompt":"How does energy flow through ecosystems?","chosen":"Energy flows through ecosystems in one direction: from the sun to producers (autotrophs) to consumers (heterotrophs) to decomposers. Only about 10% of energy is transferred from one trophic level to the next, with the rest lost as heat through cellular respiration.","rejected":"Energy flows in a circle through ecosystems, with each organism passing 100% of its energy to the next level."}
+{"prompt":"What is the nitrogen cycle?","chosen":"The nitrogen cycle includes nitrogen fixation (N2 to NH3 by bacteria), nitrification (NH3 to NO3-), assimilation by plants, and denitrification (NO3- back to N2). These processes move nitrogen through biotic and abiotic components of ecosystems.","rejected":"The nitrogen cycle is when plants absorb nitrogen gas directly from the atmosphere through their leaves."}
+{"prompt":"What is ecological succession?","chosen":"Ecological succession is the process of change in community species structure over time. Primary succession occurs on bare surfaces (e.g., after volcanic eruption) starting with pioneer species like lichens. Secondary succession occurs where soil remains (e.g., after fire). Both progress toward a climax community.","rejected":"Ecological succession is when all species in an area go extinct simultaneously and are replaced by completely new species."}
+{"prompt":"What is natural selection?","chosen":"Natural selection requires variation, heritability, differential reproduction, and adaptation. Individuals with favorable traits produce more offspring, and over generations those traits become more common. Natural selection acts on phenotypes, but evolution occurs through changes in allele frequencies.","rejected":"Natural selection is when organisms consciously choose to develop better traits to survive in their environment."}
+{"prompt":"What is the Hardy-Weinberg principle?","chosen":"The Hardy-Weinberg principle describes conditions under which allele frequencies remain constant: no mutation, random mating, no selection, large population, and no gene flow. The equation p² + 2pq + q² = 1 predicts genotype frequencies. Any deviation causes evolution.","rejected":"The Hardy-Weinberg principle states that all populations always maintain the same allele frequencies regardless of conditions."}
+{"prompt":"What is genetic drift?","chosen":"Genetic drift is the random change in allele frequencies due to chance events, especially significant in small populations. The bottleneck effect occurs when population size drastically decreases, and the founder effect occurs when a small group starts a new population.","rejected":"Genetic drift is when organisms intentionally migrate to new locations to find better mates with different genes."}
+{"prompt":"How does allopatric speciation occur?","chosen":"Allopatric speciation occurs when populations are geographically separated by a physical barrier (e.g., mountain range or river), preventing gene flow. Over time, the isolated populations diverge genetically through mutation, drift, and selection, becoming reproductively isolated.","rejected":"Allopatric speciation happens when all individuals in a species simultaneously decide to split into two groups."}
+{"prompt":"What evidence supports evolution?","chosen":"Evidence for evolution includes the fossil record (transitional forms), comparative anatomy (homologous structures like the pentadactyl limb), molecular biology (shared genetic code, DNA sequence similarity), and biogeography (species distribution reflecting evolutionary history).","rejected":"There is no scientific evidence for evolution; it is purely a philosophical concept with no observable support."}
+{"prompt":"What is coevolution?","chosen":"Coevolution occurs when two or more species reciprocally affect each other's evolution. Examples include predator-prey arms races (newt toxin vs. snake resistance), plant-pollinator relationships, and host-parasite interactions. It drives rapid diversification and specialization.","rejected":"Coevolution means all species in an ecosystem evolve at exactly the same rate in the same direction."}
+{"prompt":"What threats affect biodiversity?","chosen":"Major threats to biodiversity include habitat destruction, invasive species, pollution, overexploitation, and climate change (known by the acronym HIPPO). Biodiversity at genetic, species, and ecosystem levels is critical for ecosystem stability and resilience.","rejected":"Biodiversity is never threatened because nature always maintains a perfect balance regardless of human activity."}
+{"prompt":"What is phylogenetics?","chosen":"Phylogenetics is the study of evolutionary relationships among organisms. Phylogenetic trees (cladograms) show inferred relationships based on shared derived characteristics (synapomorphies). Molecular phylogenetics uses DNA or protein sequence comparisons, often applying the molecular clock hypothesis.","rejected":"Phylogenetics is the classification of organisms by size and color, and has nothing to do with evolutionary history."}
 DPO_EOF
 
-echo "Created DPO training data (20 examples)"
+echo "Created DPO training data (40 examples)"
 
 echo ""
 echo "=== DPO Train ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" finetune --method dpo --data "$TEST_DIR/dpo_data.jsonl" --project "$TEST_DIR" --epochs 1
+"$INSTRUCTOR" finetune --method dpo --data "$TEST_DIR/dpo_data.jsonl" --project "$TEST_DIR"
 TIME_DPO=$(( SECONDS - STEP_START ))
 echo "--- DPO Train completed in ${TIME_DPO}s ---"
 
