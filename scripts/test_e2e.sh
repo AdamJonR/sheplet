@@ -16,32 +16,45 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 
-MODEL="${1:-phi}"   # "phi", "gemma270m", or "gemma1b"
+usage() {
+    echo "Usage: $0 [--model llama1b|llama3b] [--quantization none|q4-k-m|q5-k-m|q8-0|q4-0] [--lora yes|no]"
+    echo ""
+    echo "Defaults: --model llama1b --quantization none --lora yes"
+    exit 1
+}
+
+# Defaults
+MODEL="llama1b"
+QUANTIZATION="none"
+LORA="yes"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --model)      MODEL="$2"; shift 2 ;;
+        --quantization) QUANTIZATION="$2"; shift 2 ;;
+        --lora)       LORA="$2"; shift 2 ;;
+        -h|--help)    usage ;;
+        *)            echo "Unknown option: $1"; usage ;;
+    esac
+done
 
 case "$MODEL" in
-  phi)
-    MODEL_NAME="phi-4-mini-instruct"
-    QUANTIZATION="q4-k-m"
-    ;;
-  gemma270m)
-    MODEL_NAME="gemma270m"
-    QUANTIZATION="none"
-    ;;
-  gemma1b)
-    MODEL_NAME="gemma-3-1b-it"
-    QUANTIZATION="none"
-    if [ -z "${HF_TOKEN:-}" ]; then
-        echo "Warning: HF_TOKEN not set. Gemma is a gated model — download may fail."
-        echo "  Set HF_TOKEN or run: huggingface-cli login"
-    fi
-    ;;
-  *)
-    echo "Usage: $0 [phi|gemma270m|gemma1b]"
-    exit 1
-    ;;
+  llama1b)  MODEL_NAME="llama-3.2-1b" ;;
+  llama3b)  MODEL_NAME="llama-3.2-3b" ;;
+  *)        echo "Unknown model: $MODEL"; usage ;;
 esac
 
-echo "Model: $MODEL_NAME (quantization: $QUANTIZATION)"
+case "$QUANTIZATION" in
+  none|q4-k-m|q5-k-m|q8-0|q4-0) ;;
+  *) echo "Unknown quantization: $QUANTIZATION"; usage ;;
+esac
+
+case "$LORA" in
+  yes|no) ;;
+  *) echo "Invalid --lora value: $LORA (must be yes or no)"; usage ;;
+esac
+
+echo "Model: $MODEL_NAME (quantization: $QUANTIZATION, lora: $LORA)"
 
 TOTAL_START=$SECONDS
 
@@ -205,7 +218,10 @@ STEP_START=$SECONDS
 TIME_MODEL=$(( SECONDS - STEP_START ))
 echo "--- Model completed in ${TIME_MODEL}s ---"
 
-# --- Step 7: Create DPO training data -----------------------------------------
+# --- Step 7–8: DPO training data + fine-tuning (if LoRA enabled) -------------
+
+TIME_DPO=0
+if [ "$LORA" = "yes" ]; then
 
 cat > "$TEST_DIR/dpo_data.jsonl" << 'DPO_EOF'
 {"prompt":"What is the basic unit of life?","chosen":"The cell is the basic structural and functional unit of all living organisms. According to cell theory, all living organisms are composed of one or more cells, the cell is the basic unit of life, and all cells arise from pre-existing cells.","rejected":"Atoms are the basic unit of life because everything is made of atoms."}
@@ -232,14 +248,17 @@ DPO_EOF
 
 echo "Created DPO training data (20 examples)"
 
-# --- Step 8: DPO fine-tuning --------------------------------------------------
-
 echo ""
 echo "=== DPO Train ==="
 STEP_START=$SECONDS
 "$INSTRUCTOR" finetune --method dpo --data "$TEST_DIR/dpo_data.jsonl" --project "$TEST_DIR" --epochs 1
 TIME_DPO=$(( SECONDS - STEP_START ))
 echo "--- DPO Train completed in ${TIME_DPO}s ---"
+
+else
+    echo ""
+    echo "=== Skipping LoRA fine-tuning (--lora no) ==="
+fi
 
 # --- Step 9: Config -----------------------------------------------------------
 
@@ -288,7 +307,9 @@ printf "  %-14s %ss\n" "Build:" "$TIME_BUILD"
 printf "  %-14s %ss\n" "Init:" "$TIME_INIT"
 printf "  %-14s %ss\n" "Ingest:" "$TIME_INGEST"
 printf "  %-14s %ss\n" "Model:" "$TIME_MODEL"
+if [ "$LORA" = "yes" ]; then
 printf "  %-14s %ss\n" "DPO Train:" "$TIME_DPO"
+fi
 printf "  %-14s %ss\n" "Config:" "$TIME_CONFIG"
 printf "  %-14s %ss\n" "Bundle:" "$TIME_BUNDLE"
 printf "  %-14s %ss\n" "Total:" "$TOTAL_ELAPSED"
