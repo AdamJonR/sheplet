@@ -7,7 +7,7 @@ use candle_core::{Device, Tensor};
 use crate::error::{RagError, Result};
 
 /// Map a HuggingFace Phi-3/4 tensor name to the GGML convention used by quantized_phi3.
-fn map_tensor_name(hf_name: &str) -> Option<String> {
+fn map_tensor_name_phi(hf_name: &str) -> Option<String> {
     // Embedding
     if hf_name == "model.embed_tokens.weight" {
         return Some("token_embd.weight".to_string());
@@ -43,6 +43,46 @@ fn map_tensor_name(hf_name: &str) -> Option<String> {
     None
 }
 
+/// Map a HuggingFace Llama tensor name to the GGML convention used by quantized_llama.
+fn map_tensor_name_llama(hf_name: &str) -> Option<String> {
+    // Embedding
+    if hf_name == "model.embed_tokens.weight" {
+        return Some("token_embd.weight".to_string());
+    }
+    // Final norm
+    if hf_name == "model.norm.weight" {
+        return Some("output_norm.weight".to_string());
+    }
+    // LM head
+    if hf_name == "lm_head.weight" {
+        return Some("output.weight".to_string());
+    }
+
+    // Layer-level mappings: model.layers.{i}.XXX -> blk.{i}.YYY
+    if let Some(rest) = hf_name.strip_prefix("model.layers.") {
+        let dot_pos = rest.find('.')?;
+        let layer_idx = &rest[..dot_pos];
+        let suffix = &rest[dot_pos + 1..];
+
+        let ggml_suffix = match suffix {
+            "self_attn.q_proj.weight" => "attn_q.weight",
+            "self_attn.k_proj.weight" => "attn_k.weight",
+            "self_attn.v_proj.weight" => "attn_v.weight",
+            "self_attn.o_proj.weight" => "attn_output.weight",
+            "mlp.gate_proj.weight" => "ffn_gate.weight",
+            "mlp.up_proj.weight" => "ffn_up.weight",
+            "mlp.down_proj.weight" => "ffn_down.weight",
+            "input_layernorm.weight" => "attn_norm.weight",
+            "post_attention_layernorm.weight" => "ffn_norm.weight",
+            _ => return None,
+        };
+
+        return Some(format!("blk.{layer_idx}.{ggml_suffix}"));
+    }
+
+    None
+}
+
 /// Determine the quantization dtype for a given tensor name under the specified scheme.
 fn quant_dtype_for_tensor(ggml_name: &str, scheme: &str) -> GgmlDType {
     let is_norm = ggml_name.contains("norm");
@@ -55,8 +95,8 @@ fn quant_dtype_for_tensor(ggml_name: &str, scheme: &str) -> GgmlDType {
 
     match scheme {
         "q4-k-m" | "q5-k-m" => {
-            // K-M mixed: Q6K for sensitive layers (attn_output, ffn_down), base dtype for the rest
-            if ggml_name.contains("attn_output") || ggml_name.contains("ffn_down") {
+            // K-M mixed: Q6K for sensitive layers (attn_output, ffn_down, ffn_gate), base dtype for the rest
+            if ggml_name.contains("attn_output") || ggml_name.contains("ffn_down") || ggml_name.contains("ffn_gate") {
                 GgmlDType::Q6K
             } else if scheme == "q5-k-m" {
                 GgmlDType::Q5K
@@ -70,12 +110,23 @@ fn quant_dtype_for_tensor(ggml_name: &str, scheme: &str) -> GgmlDType {
     }
 }
 
-/// Parse the Phi-3/4 config.json to extract model parameters needed for GGUF metadata.
-fn read_phi_config(model_dir: &Path) -> Result<PhiParams> {
-    let config_path = model_dir.join("config.json");
-    let config_str = std::fs::read_to_string(&config_path)?;
-    let config: serde_json::Value = serde_json::from_str(&config_str)?;
+struct ModelParams {
+    hidden_size: u32,
+    num_attention_heads: u32,
+    num_kv_heads: u32,
+    num_hidden_layers: u32,
+    intermediate_size: u32,
+    vocab_size: u32,
+    max_position_embeddings: u32,
+    rms_norm_eps: f32,
+    rope_theta: f32,
+    head_dim: u32,
+    tie_word_embeddings: bool,
+    partial_rotary_factor: f32,
+}
 
+/// Parse common model config.json fields into ModelParams.
+fn read_model_config(config: &serde_json::Value) -> Result<ModelParams> {
     let hidden_size = config["hidden_size"]
         .as_u64()
         .ok_or_else(|| RagError::Other("missing hidden_size in config".into()))?
@@ -114,7 +165,7 @@ fn read_phi_config(model_dir: &Path) -> Result<PhiParams> {
 
     let head_dim = hidden_size / num_attention_heads;
 
-    Ok(PhiParams {
+    Ok(ModelParams {
         hidden_size,
         num_attention_heads,
         num_kv_heads,
@@ -130,19 +181,12 @@ fn read_phi_config(model_dir: &Path) -> Result<PhiParams> {
     })
 }
 
-struct PhiParams {
-    hidden_size: u32,
-    num_attention_heads: u32,
-    num_kv_heads: u32,
-    num_hidden_layers: u32,
-    intermediate_size: u32,
-    vocab_size: u32,
-    max_position_embeddings: u32,
-    rms_norm_eps: f32,
-    rope_theta: f32,
-    head_dim: u32,
-    tie_word_embeddings: bool,
-    partial_rotary_factor: f32,
+/// Detect architecture from config.json.
+fn detect_quant_arch(config: &serde_json::Value) -> &'static str {
+    match config.get("model_type").and_then(|v| v.as_str()) {
+        Some("llama") => "llama",
+        _ => "phi3",
+    }
 }
 
 /// Quantize SafeTensors model files to a single GGUF file.
@@ -161,8 +205,16 @@ pub fn quantize_safetensors_to_gguf(
 ) -> Result<()> {
     let device = Device::Cpu;
 
-    // Read model config for GGUF metadata
-    let params = read_phi_config(model_dir)?;
+    // Read model config for GGUF metadata and auto-detect architecture
+    let config_path = model_dir.join("config.json");
+    let config_str = std::fs::read_to_string(&config_path)?;
+    let config_json: serde_json::Value = serde_json::from_str(&config_str)?;
+    let arch = detect_quant_arch(&config_json);
+    let params = read_model_config(&config_json)?;
+    let map_tensor_name: fn(&str) -> Option<String> = match arch {
+        "llama" => map_tensor_name_llama,
+        _ => map_tensor_name_phi,
+    };
 
     // Find all safetensors files
     let mut st_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
@@ -244,9 +296,9 @@ pub fn quantize_safetensors_to_gguf(
         }
     }
 
-    // Build GGUF metadata
+    // Build GGUF metadata with architecture-specific prefix
     use gguf_file::Value;
-    let arch = Value::String("phi3".to_string());
+    let arch_val = Value::String(arch.to_string());
     let block_count = Value::U32(params.num_hidden_layers);
     let embedding_length = Value::U32(params.hidden_size);
     let head_count = Value::U32(params.num_attention_heads);
@@ -257,20 +309,33 @@ pub fn quantize_safetensors_to_gguf(
     let effective_rope_dim = (params.head_dim as f32 * params.partial_rotary_factor) as u32;
     let rope_dim = Value::U32(effective_rope_dim);
     let rope_freq = Value::F32(params.rope_theta);
-    let vocab_size = Value::U32(params.vocab_size);
+    let vocab_size_val = Value::U32(params.vocab_size);
+
+    // Use architecture-appropriate prefix (phi3.* or llama.*)
+    let prefix = arch;
+    let key_block = format!("{prefix}.block_count");
+    let key_emb = format!("{prefix}.embedding_length");
+    let key_head = format!("{prefix}.attention.head_count");
+    let key_head_kv = format!("{prefix}.attention.head_count_kv");
+    let key_ctx = format!("{prefix}.context_length");
+    let key_ff = format!("{prefix}.feed_forward_length");
+    let key_rms = format!("{prefix}.attention.layer_norm_rms_epsilon");
+    let key_rope_dim = format!("{prefix}.rope.dimension_count");
+    let key_rope_freq = format!("{prefix}.rope.freq_base");
+    let key_vocab = format!("{prefix}.vocab_size");
 
     let metadata: Vec<(&str, &Value)> = vec![
-        ("general.architecture", &arch),
-        ("phi3.block_count", &block_count),
-        ("phi3.embedding_length", &embedding_length),
-        ("phi3.attention.head_count", &head_count),
-        ("phi3.attention.head_count_kv", &head_count_kv),
-        ("phi3.context_length", &context_length),
-        ("phi3.feed_forward_length", &feed_forward_length),
-        ("phi3.attention.layer_norm_rms_epsilon", &rms_eps),
-        ("phi3.rope.dimension_count", &rope_dim),
-        ("phi3.rope.freq_base", &rope_freq),
-        ("phi3.vocab_size", &vocab_size),
+        ("general.architecture", &arch_val),
+        (&key_block, &block_count),
+        (&key_emb, &embedding_length),
+        (&key_head, &head_count),
+        (&key_head_kv, &head_count_kv),
+        (&key_ctx, &context_length),
+        (&key_ff, &feed_forward_length),
+        (&key_rms, &rms_eps),
+        (&key_rope_dim, &rope_dim),
+        (&key_rope_freq, &rope_freq),
+        (&key_vocab, &vocab_size_val),
     ];
 
     // Build tensor refs
@@ -331,44 +396,134 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tensor_name_mapping() {
+    fn test_tensor_name_mapping_phi() {
         assert_eq!(
-            map_tensor_name("model.embed_tokens.weight"),
+            map_tensor_name_phi("model.embed_tokens.weight"),
             Some("token_embd.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.norm.weight"),
+            map_tensor_name_phi("model.norm.weight"),
             Some("output_norm.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("lm_head.weight"),
+            map_tensor_name_phi("lm_head.weight"),
             Some("output.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.0.self_attn.qkv_proj.weight"),
+            map_tensor_name_phi("model.layers.0.self_attn.qkv_proj.weight"),
             Some("blk.0.attn_qkv.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.5.self_attn.o_proj.weight"),
+            map_tensor_name_phi("model.layers.5.self_attn.o_proj.weight"),
             Some("blk.5.attn_output.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.3.mlp.gate_up_proj.weight"),
+            map_tensor_name_phi("model.layers.3.mlp.gate_up_proj.weight"),
             Some("blk.3.ffn_up.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.3.mlp.down_proj.weight"),
+            map_tensor_name_phi("model.layers.3.mlp.down_proj.weight"),
             Some("blk.3.ffn_down.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.1.input_layernorm.weight"),
+            map_tensor_name_phi("model.layers.1.input_layernorm.weight"),
             Some("blk.1.attn_norm.weight".to_string())
         );
         assert_eq!(
-            map_tensor_name("model.layers.1.post_attention_layernorm.weight"),
+            map_tensor_name_phi("model.layers.1.post_attention_layernorm.weight"),
             Some("blk.1.ffn_norm.weight".to_string())
         );
-        assert_eq!(map_tensor_name("unknown.tensor"), None);
+        assert_eq!(map_tensor_name_phi("unknown.tensor"), None);
+    }
+
+    #[test]
+    fn test_tensor_name_mapping_llama() {
+        // Embeddings and norms — same as Phi
+        assert_eq!(
+            map_tensor_name_llama("model.embed_tokens.weight"),
+            Some("token_embd.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.norm.weight"),
+            Some("output_norm.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("lm_head.weight"),
+            Some("output.weight".to_string())
+        );
+        // Separate q/k/v projections
+        assert_eq!(
+            map_tensor_name_llama("model.layers.0.self_attn.q_proj.weight"),
+            Some("blk.0.attn_q.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.0.self_attn.k_proj.weight"),
+            Some("blk.0.attn_k.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.0.self_attn.v_proj.weight"),
+            Some("blk.0.attn_v.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.5.self_attn.o_proj.weight"),
+            Some("blk.5.attn_output.weight".to_string())
+        );
+        // Separate gate/up/down MLP
+        assert_eq!(
+            map_tensor_name_llama("model.layers.3.mlp.gate_proj.weight"),
+            Some("blk.3.ffn_gate.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.3.mlp.up_proj.weight"),
+            Some("blk.3.ffn_up.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.3.mlp.down_proj.weight"),
+            Some("blk.3.ffn_down.weight".to_string())
+        );
+        // Norms
+        assert_eq!(
+            map_tensor_name_llama("model.layers.1.input_layernorm.weight"),
+            Some("blk.1.attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            map_tensor_name_llama("model.layers.1.post_attention_layernorm.weight"),
+            Some("blk.1.ffn_norm.weight".to_string())
+        );
+        assert_eq!(map_tensor_name_llama("unknown.tensor"), None);
+    }
+
+    #[test]
+    fn test_llama_gguf_metadata() {
+        let config_json = serde_json::json!({"model_type": "llama"});
+        let arch = detect_quant_arch(&config_json);
+        assert_eq!(arch, "llama");
+        // Verify metadata keys would use llama prefix
+        let prefix = arch;
+        assert_eq!(format!("{prefix}.block_count"), "llama.block_count");
+        assert_eq!(format!("{prefix}.attention.head_count"), "llama.attention.head_count");
+    }
+
+    #[test]
+    fn test_quant_dtype_for_llama_tensors() {
+        // ffn_gate should be treated as sensitive in k-m schemes
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.ffn_gate.weight", "q4-k-m"),
+            GgmlDType::Q6K
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.ffn_gate.weight", "q5-k-m"),
+            GgmlDType::Q6K
+        );
+        // attn_q, attn_k, attn_v should get base dtype
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.attn_q.weight", "q4-k-m"),
+            GgmlDType::Q4K
+        );
+        assert_eq!(
+            quant_dtype_for_tensor("blk.0.attn_k.weight", "q5-k-m"),
+            GgmlDType::Q5K
+        );
     }
 
     #[test]

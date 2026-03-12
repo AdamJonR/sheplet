@@ -2,10 +2,12 @@ pub mod config;
 pub mod error;
 pub mod gemma3;
 pub mod inference;
+pub mod llama;
 pub mod phi3;
 pub mod pipeline;
 pub mod prompt;
 pub mod quantize;
+pub mod quantized_llama;
 pub mod quantized_phi3;
 
 pub use config::RagConfig;

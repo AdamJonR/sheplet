@@ -131,22 +131,13 @@ impl RotaryEmbedding {
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
 
-        // Compute LongRoPE attention_factor scaling
-        let attention_factor = if cfg.rope_scaling.is_some() {
-            let factor = cfg.max_position_embeddings as f64
-                / cfg.original_max_position_embeddings as f64;
-            if factor <= 1.0 {
-                1.0
-            } else {
-                (1.0 + factor.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
-            }
-        } else {
-            1.0
-        };
-
+        // attention_factor is NOT applied for short-context inference.
+        // Since we use short_factor (all 1.0) and cap at original_max_position_embeddings,
+        // we're in the short-context regime where vanilla RoPE is correct.
+        // This matches the quantized model's behavior (no scaling, works correctly).
         Ok(Self {
-            sin: (freqs.sin()? * attention_factor)?,
-            cos: (freqs.cos()? * attention_factor)?,
+            sin: freqs.sin()?,
+            cos: freqs.cos()?,
             rope_dim,
         })
     }
@@ -401,6 +392,20 @@ impl Model {
         } else {
             linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         };
+
+        // Debug: verify weight loading
+        if std::env::var("SHEPLET_DEBUG").is_ok() {
+            let emb_w = embed_tokens.embeddings();
+            let emb_flat = emb_w.flatten_all()?.to_dtype(DType::F32)?;
+            let emb_vals = emb_flat.narrow(0, 0, 3.min(emb_flat.dim(0)?))?.to_vec1::<f32>()?;
+            eprintln!("DEBUG embed_tokens weight: shape={:?}, dtype={:?}, first 3 vals={:?}",
+                emb_w.dims(), emb_w.dtype(), emb_vals);
+
+            let lm_w = lm_head.weight();
+            eprintln!("DEBUG lm_head weight: shape={:?}, dtype={:?}, tied={}",
+                lm_w.dims(), lm_w.dtype(), cfg.tie_word_embeddings);
+        }
+
         Ok(Self {
             embed_tokens,
             layers,
@@ -432,6 +437,7 @@ impl Model {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let debug = std::env::var("SHEPLET_DEBUG").is_ok();
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -440,12 +446,54 @@ impl Model {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
+
+        if debug && seqlen_offset == 0 {
+            let xs_f32 = xs.flatten_all()?.to_dtype(DType::F32)?;
+            let vals = xs_f32.to_vec1::<f32>()?;
+            let has_nan = vals.iter().any(|v| v.is_nan());
+            let has_inf = vals.iter().any(|v| v.is_infinite());
+            let mean = vals.iter().map(|v| *v as f64).sum::<f64>() / vals.len() as f64;
+            let first3: Vec<f32> = vals.iter().take(3).copied().collect();
+            eprintln!("DEBUG after embed_tokens: shape={:?}, dtype={:?}, nan={}, inf={}, mean={:.6}, first3={:?}",
+                xs.dims(), xs.dtype(), has_nan, has_inf, mean, first3);
+        }
+
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        let out = xs.narrow(1, seq_len - 1, 1)?;
+        let normed = out.apply(&self.norm)?;
+
+        if debug && seqlen_offset == 0 {
+            let n_f32 = normed.flatten_all()?.to_dtype(DType::F32)?;
+            let vals = n_f32.to_vec1::<f32>()?;
+            let has_nan = vals.iter().any(|v| v.is_nan());
+            let has_inf = vals.iter().any(|v| v.is_infinite());
+            let mean = vals.iter().map(|v| *v as f64).sum::<f64>() / vals.len() as f64;
+            eprintln!("DEBUG after norm: shape={:?}, nan={}, inf={}, mean={:.6}",
+                normed.dims(), has_nan, has_inf, mean);
+        }
+
+        let logits = normed.apply(&self.lm_head)?;
+
+        if debug && seqlen_offset == 0 {
+            let l_f32 = logits.flatten_all()?.to_dtype(DType::F32)?;
+            let vals = l_f32.to_vec1::<f32>()?;
+            let has_nan = vals.iter().any(|v| v.is_nan());
+            let has_inf = vals.iter().any(|v| v.is_infinite());
+            let min = vals.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max = vals.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut indexed: Vec<(usize, f32)> = vals.iter().copied().enumerate().collect();
+            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            eprintln!("DEBUG after lm_head: shape={:?}, nan={}, inf={}, min={:.4}, max={:.4}",
+                logits.dims(), has_nan, has_inf, min, max);
+            eprintln!("DEBUG top-5 logits:");
+            for (rank, (idx, val)) in indexed.iter().take(5).enumerate() {
+                eprintln!("  {}: token {} = {:.4}", rank + 1, idx, val);
+            }
+        }
+
+        Ok(logits)
     }
 
     pub fn clear_kv_cache(&mut self) {
@@ -512,42 +560,32 @@ mod tests {
         cfg_vanilla.rope_scaling = None;
         let rotary_vanilla = RotaryEmbedding::new(DType::F32, &cfg_vanilla, &dev).unwrap();
 
-        // With short_factor=1.0 + attention_factor, the base frequencies should match vanilla
-        // (only the attention_factor scaling differs). If long_factor=50.0 were used,
-        // the values would be completely different.
+        // With short_factor=1.0 and no attention_factor, the frequencies should match vanilla
+        // exactly. If long_factor=50.0 were used, the values would be completely different.
         let cos_scaled = rotary_with_scaling.cos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
         let cos_vanilla = rotary_vanilla.cos.flatten_all().unwrap().to_vec1::<f32>().unwrap();
 
-        // Compute expected attention_factor for this config
-        let factor = 131072.0_f64 / 4096.0_f64; // 32
-        let attention_factor = (1.0 + factor.ln() / 4096.0_f64.ln()).sqrt();
-
-        // cos_scaled should equal cos_vanilla * attention_factor (within float tolerance)
+        // cos_scaled should equal cos_vanilla exactly (within float tolerance)
         for (i, (scaled, vanilla)) in cos_scaled.iter().zip(cos_vanilla.iter()).enumerate().take(100) {
-            let expected = *vanilla as f64 * attention_factor;
-            let diff = (*scaled as f64 - expected).abs();
-            assert!(diff < 1e-5, "cos mismatch at index {i}: scaled={scaled}, expected={expected}");
+            let diff = (*scaled - *vanilla).abs();
+            assert!(diff < 1e-6, "cos mismatch at index {i}: scaled={scaled}, vanilla={vanilla}");
         }
     }
 
     #[test]
-    fn test_rotary_attention_factor_applied() {
+    fn test_rotary_no_attention_factor_for_short_context() {
         let cfg = phi4_mini_config();
         let dev = Device::Cpu;
         let rotary = RotaryEmbedding::new(DType::F32, &cfg, &dev).unwrap();
 
-        // For position 0, cos should be attention_factor * 1.0 (since cos(0)=1)
+        // For position 0, cos should be 1.0 (vanilla cos(0)=1, no attention_factor scaling)
         let cos_row0 = rotary.cos.get(0).unwrap().to_vec1::<f32>().unwrap();
-        let factor = 131072.0_f64 / 4096.0_f64;
-        let attention_factor = (1.0 + factor.ln() / 4096.0_f64.ln()).sqrt();
-
-        // All cos values at position 0 should be attention_factor (cos(0)=1)
         for (i, val) in cos_row0.iter().enumerate() {
-            let diff = (*val as f64 - attention_factor).abs();
-            assert!(diff < 1e-5, "cos[0][{i}] = {val}, expected {attention_factor}");
+            let diff = (*val - 1.0_f32).abs();
+            assert!(diff < 1e-6, "cos[0][{i}] = {val}, expected 1.0");
         }
 
-        // sin at position 0 should be 0 * attention_factor = 0
+        // sin at position 0 should be 0.0 (vanilla sin(0)=0)
         let sin_row0 = rotary.sin.get(0).unwrap().to_vec1::<f32>().unwrap();
         for (i, val) in sin_row0.iter().enumerate() {
             assert!(val.abs() < 1e-6, "sin[0][{i}] = {val}, expected ~0");

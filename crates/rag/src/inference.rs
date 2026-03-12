@@ -7,11 +7,13 @@ use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
 use crate::quantized_phi3;
+use crate::quantized_llama;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
     Phi3,
     Gemma3,
+    Llama,
 }
 
 /// Parse `eos_token_id` from a model's config.json string.
@@ -45,6 +47,7 @@ fn detect_model_arch_with_config(model_dir: impl AsRef<Path>) -> Result<(ModelAr
     let config: serde_json::Value = serde_json::from_str(&config_str)?;
     let arch = match config.get("model_type").and_then(|v| v.as_str()) {
         Some("gemma3_text" | "gemma2") => ModelArch::Gemma3,
+        Some("llama") => ModelArch::Llama,
         _ => ModelArch::Phi3,
     };
     Ok((arch, config_str))
@@ -70,6 +73,8 @@ enum InferenceModel {
     PhiFull(crate::phi3::Model),
     PhiQuantized(quantized_phi3::ModelWeights),
     Gemma3(crate::gemma3::Gemma3Model),
+    LlamaFull(crate::llama::LlamaModel),
+    LlamaQuantized(quantized_llama::ModelWeights),
 }
 
 impl InferenceModel {
@@ -78,6 +83,8 @@ impl InferenceModel {
             InferenceModel::PhiFull(m) => m.forward(input, index_pos),
             InferenceModel::PhiQuantized(m) => m.forward(input, index_pos),
             InferenceModel::Gemma3(m) => m.forward(input, index_pos),
+            InferenceModel::LlamaFull(m) => m.forward(input, index_pos),
+            InferenceModel::LlamaQuantized(m) => m.forward(input, index_pos),
         }
     }
 
@@ -86,6 +93,8 @@ impl InferenceModel {
             InferenceModel::PhiFull(m) => m.clear_kv_cache(),
             InferenceModel::PhiQuantized(m) => m.clear_kv_cache(),
             InferenceModel::Gemma3(m) => m.clear_kv_cache(),
+            InferenceModel::LlamaFull(m) => m.clear_kv_cache(),
+            InferenceModel::LlamaQuantized(m) => m.clear_kv_cache(),
         }
     }
 }
@@ -115,9 +124,23 @@ impl PhiGenerator {
             let mut file = std::fs::File::open(&gguf_path)?;
             let ct = candle_core::quantized::gguf_file::Content::read(&mut file)
                 .map_err(|e| RagError::Other(format!("failed to read GGUF: {e}")))?;
-            let weights = quantized_phi3::ModelWeights::from_gguf(ct, &mut file, device)
-                .map_err(|e| RagError::Other(format!("failed to load quantized model: {e}")))?;
-            InferenceModel::PhiQuantized(weights)
+            // Dispatch based on GGUF architecture metadata
+            let gguf_arch = ct.metadata.get("general.architecture")
+                .and_then(|v| v.to_string().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            match gguf_arch.as_str() {
+                "llama" => {
+                    let weights = quantized_llama::ModelWeights::from_gguf(ct, &mut file, device)
+                        .map_err(|e| RagError::Other(format!("failed to load quantized Llama model: {e}")))?;
+                    InferenceModel::LlamaQuantized(weights)
+                }
+                _ => {
+                    let weights = quantized_phi3::ModelWeights::from_gguf(ct, &mut file, device)
+                        .map_err(|e| RagError::Other(format!("failed to load quantized model: {e}")))?;
+                    InferenceModel::PhiQuantized(weights)
+                }
+            }
         } else {
             // Fall back to SafeTensors path
             let mut safetensors_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
@@ -135,6 +158,7 @@ impl PhiGenerator {
             }
 
             let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
+            let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
             match arch {
                 ModelArch::Gemma3 => {
                     let config: crate::gemma3::Gemma3Config =
@@ -150,7 +174,6 @@ impl PhiGenerator {
                         config.rope_theta, config.rope_local_base_freq, config.sliding_window,
                     );
 
-                    let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
                         merge_lora_adapter(
                             &safetensors_files,
@@ -168,6 +191,34 @@ impl PhiGenerator {
                     let model = crate::gemma3::Gemma3Model::new(&config, vb)?;
                     InferenceModel::Gemma3(model)
                 }
+                ModelArch::Llama => {
+                    let config: crate::llama::LlamaConfig =
+                        serde_json::from_str(&config_str)?;
+
+                    eprintln!(
+                        "Llama config: hidden_size={}, head_dim={}, layers={}, \
+                         rope_theta={}, tie_word_embeddings={}",
+                        config.hidden_size, config.head_dim(), config.num_hidden_layers,
+                        config.rope_theta, config.tie_word_embeddings,
+                    );
+
+                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                        merge_lora_adapter(
+                            &safetensors_files,
+                            adapter_path.unwrap(),
+                            device,
+                            dtype,
+                            false,
+                        )?
+                    } else {
+                        unsafe {
+                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                        }
+                    };
+
+                    let model = crate::llama::LlamaModel::new(&config, vb)?;
+                    InferenceModel::LlamaFull(model)
+                }
                 ModelArch::Phi3 => {
                     let config: crate::phi3::Config =
                         serde_json::from_str(&config_str)?;
@@ -181,7 +232,6 @@ impl PhiGenerator {
                         config.tie_word_embeddings,
                     );
 
-                    let dtype = DType::F32;
                     let vb = if adapter_path.is_some_and(|p| p.exists()) {
                         merge_lora_adapter(
                             &safetensors_files,
@@ -207,6 +257,7 @@ impl PhiGenerator {
             // GGUF models don't have config.json — use tokenizer heuristic
             let id = tokenizer
                 .token_to_id("<end_of_turn>")
+                .or_else(|| tokenizer.token_to_id("<|eot_id|>"))
                 .or_else(|| tokenizer.token_to_id("<eos>"))
                 .or_else(|| tokenizer.token_to_id("<|end|>"))
                 .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
@@ -223,6 +274,7 @@ impl PhiGenerator {
                 // Fall back to tokenizer heuristic
                 let id = tokenizer
                     .token_to_id("<end_of_turn>")
+                    .or_else(|| tokenizer.token_to_id("<|eot_id|>"))
                     .or_else(|| tokenizer.token_to_id("<eos>"))
                     .or_else(|| tokenizer.token_to_id("<|end|>"))
                     .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
@@ -506,11 +558,23 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_model_arch_llama() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "llama"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Llama);
+    }
+
+    #[test]
     fn test_detect_model_arch_unknown_falls_back_to_phi3() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("config.json"),
-            r#"{"model_type": "llama3"}"#,
+            r#"{"model_type": "mistral"}"#,
         )
         .unwrap();
         let arch = detect_model_arch(dir.path()).unwrap();
