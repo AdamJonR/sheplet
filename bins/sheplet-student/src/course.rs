@@ -128,7 +128,7 @@ impl CourseManager {
         )
         .await?;
 
-        let adapter_path = course_dir.join("adapter.lora");
+        let adapter_path = course_dir.join("adapter.safetensors");
         let adapter = if no_adapter {
             println!("[debug] --no-adapter flag set: skipping LoRA adapter, using base model only");
             None

@@ -201,40 +201,51 @@ pub fn train_sft_full(
     let mut optimizer = AdamW::new_lr(vars.clone(), config.learning_rate)
         .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
 
-    for _epoch in 0..config.epochs {
+    for epoch in 0..config.epochs {
+        let mut epoch_loss_sum = 0.0f64;
+        let mut epoch_count = 0usize;
+
         for example in data {
             trainer.clear_kv_cache();
 
-            // Tokenize input + output together
+            // Tokenize input and output separately to find the boundary
+            let input_tokens = trainer
+                .encode(&example.input)
+                .map_err(|e| FinetuneError::Training(format!("tokenize input: {e}")))?;
             let full_text = format!("{}{}", example.input, example.output);
             let all_tokens = trainer
                 .encode(&full_text)
                 .map_err(|e| FinetuneError::Training(format!("tokenize: {e}")))?;
 
             let seq_len = all_tokens.len().min(config.max_seq_len);
-            if seq_len < 2 {
+            let input_len = input_tokens.len().min(seq_len);
+            if seq_len < 2 || input_len >= seq_len {
                 continue;
             }
 
             let input_ids = &all_tokens[..seq_len];
             let input_tensor = Tensor::from_vec(input_ids.to_vec(), &[1, seq_len], &device)?;
 
-            // Forward pass — returns last-position logits
+            // Forward pass returning logits from input_len-1 onwards (all response positions)
+            let resp_start = input_len - 1;
             let logits = trainer
-                .forward(&input_tensor, 0)
+                .forward_from(&input_tensor, 0, resp_start)
                 .map_err(|e| FinetuneError::Training(format!("forward: {e}")))?;
 
-            let logits = logits.squeeze(0)?; // [1, vocab_size]
+            let logits = logits.squeeze(0)?; // [resp_len+1, vocab_size]
 
-            // Target is the next token after the sequence
-            let target_token = if seq_len < all_tokens.len() {
-                all_tokens[seq_len]
-            } else {
-                *all_tokens.last().unwrap()
-            };
-            let target = Tensor::from_vec(vec![target_token], &[1], &device)?;
+            // Target tokens for the response portion
+            let targets: Vec<u32> = all_tokens[input_len..seq_len].to_vec();
+            let n_targets = targets.len();
+            if n_targets == 0 {
+                continue;
+            }
 
-            let loss = candle_nn::loss::cross_entropy(&logits, &target)
+            // Narrow logits to match target count (last row predicts beyond sequence)
+            let logits = logits.narrow(0, 0, n_targets)?;
+            let target_tensor = Tensor::from_vec(targets, &[n_targets], &device)?;
+
+            let loss = candle_nn::loss::cross_entropy(&logits, &target_tensor)
                 .map_err(|e| FinetuneError::Training(format!("loss: {e}")))?;
 
             let mut grads = loss.backward()
@@ -247,7 +258,15 @@ pub fn train_sft_full(
             let updated: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
             trainer.set_lora_tensors(&updated);
 
-            final_loss = loss.to_scalar::<f32>()? as f64;
+            let step_loss = loss.to_scalar::<f32>()? as f64;
+            epoch_loss_sum += step_loss;
+            epoch_count += 1;
+            final_loss = step_loss;
+        }
+
+        if epoch_count > 0 {
+            let avg_loss = epoch_loss_sum / epoch_count as f64;
+            eprintln!("SFT epoch {}/{}: avg_loss={avg_loss:.4}, examples={epoch_count}", epoch + 1, config.epochs);
         }
     }
 

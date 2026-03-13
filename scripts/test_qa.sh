@@ -221,7 +221,7 @@ run_instructor_pipeline() {
     # Model
     echo "  [model] quantization=$quantization"
     step_start=$SECONDS
-    "$INSTRUCTOR" model --name "llama-3.2-1b" --quantization "$quantization" --project "$project_dir"
+    "$INSTRUCTOR" model --name "llama-3.2-3b" --quantization "$quantization" --project "$project_dir"
     local time_model=$(( SECONDS - step_start ))
     echo "    model: ${time_model}s"
 

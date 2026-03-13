@@ -19,8 +19,8 @@ pub struct DpoConfig {
 impl Default for DpoConfig {
     fn default() -> Self {
         Self {
-            beta: 0.3,
-            learning_rate: 1e-5,
+            beta: 0.1,
+            learning_rate: 5e-5,
             epochs: 3,
             max_seq_len: 512,
         }
@@ -274,7 +274,10 @@ pub fn train_dpo_full(
     let mut optimizer = AdamW::new_lr(vars.clone(), config.learning_rate)
         .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
 
-    for _epoch in 0..config.epochs {
+    for epoch in 0..config.epochs {
+        let mut epoch_loss_sum = 0.0f64;
+        let mut epoch_count = 0usize;
+
         for example in data {
             // Tokenize prompt+chosen and prompt+rejected
             let chosen_text = format!("{}{}", example.prompt, example.chosen);
@@ -369,7 +372,7 @@ pub fn train_dpo_full(
 
             let mut grads = loss.backward()
                 .map_err(|e| FinetuneError::Training(format!("backward failed: {e}")))?;
-            clip_grad_norm(&vars, &mut grads, 1.0)?;
+            let grad_norm = clip_grad_norm(&vars, &mut grads, 1.0)?;
             optimizer.step(&grads)
                 .map_err(|e| FinetuneError::Training(format!("optimizer step failed: {e}")))?;
 
@@ -377,7 +380,16 @@ pub fn train_dpo_full(
             let updated: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
             trainer.set_lora_tensors(&updated);
 
-            final_loss = loss.to_scalar::<f32>()? as f64;
+            let step_loss = loss.to_scalar::<f32>()? as f64;
+            epoch_loss_sum += step_loss;
+            epoch_count += 1;
+            final_loss = step_loss;
+            let _ = grad_norm; // used below in diagnostics
+        }
+
+        if epoch_count > 0 {
+            let avg_loss = epoch_loss_sum / epoch_count as f64;
+            eprintln!("DPO epoch {}/{}: avg_loss={avg_loss:.4}, examples={epoch_count}", epoch + 1, config.epochs);
         }
     }
 

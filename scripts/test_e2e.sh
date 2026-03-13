@@ -19,14 +19,14 @@ INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 usage() {
     echo "Usage: $0 [--model llama1b|llama3b] [--quantization none|q4-k-m|q5-k-m|q8-0|q4-0] [--lora yes|no]"
     echo ""
-    echo "Defaults: --model llama1b --quantization none --lora yes"
+    echo "Defaults: --model llama3b --quantization none --lora no"
     exit 1
 }
 
 # Defaults
-MODEL="llama1b"
+MODEL="llama3b"
 QUANTIZATION="none"
-LORA="yes"
+LORA="no"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -366,11 +366,46 @@ STEP_START=$SECONDS
 TIME_MODEL=$(( SECONDS - STEP_START ))
 echo "--- Model completed in ${TIME_MODEL}s ---"
 
-# --- Step 7–8: DPO training data + fine-tuning (if LoRA enabled) -------------
+# --- Step 7–8: SFT + DPO training (if LoRA enabled) -------------------------
 
+TIME_SFT=0
 TIME_DPO=0
 if [ "$LORA" = "yes" ]; then
 
+# --- SFT training data (input/output pairs from source documents) ---
+cat > "$TEST_DIR/sft_data.jsonl" << 'SFT_EOF'
+{"input":"What is the basic unit of life?","output":"The cell is the basic structural and functional unit of all living organisms. Cell theory states that all living organisms are composed of one or more cells, the cell is the basic unit of life, and all cells arise from pre-existing cells."}
+{"input":"What are the two main types of cells?","output":"Cells are broadly classified into prokaryotic and eukaryotic. Prokaryotic cells, found in bacteria and archaea, lack a membrane-bound nucleus. Eukaryotic cells, found in animals, plants, fungi, and protists, contain a well-defined nucleus and specialized organelles."}
+{"input":"What is the function of mitochondria?","output":"Mitochondria are the powerhouses of the cell, responsible for cellular respiration and ATP production. They have a double membrane structure with an inner membrane folded into cristae, which increases surface area for the electron transport chain."}
+{"input":"Describe the structure of DNA.","output":"DNA has a double helix structure consisting of two complementary strands of nucleotides. Each nucleotide contains a deoxyribose sugar, a phosphate group, and one of four nitrogenous bases: adenine (A), thymine (T), guanine (G), and cytosine (C). A pairs with T and G pairs with C."}
+{"input":"What is Mendel's Law of Segregation?","output":"The Law of Segregation states that during gamete formation, the two alleles for each gene separate so that each gamete carries only one allele for each trait. This occurs during meiosis I when homologous chromosomes are separated."}
+{"input":"What is osmosis?","output":"Osmosis is the movement of water molecules across a selectively permeable membrane from an area of lower solute concentration to an area of higher solute concentration."}
+{"input":"What is the role of the Golgi apparatus?","output":"The Golgi apparatus processes, packages, and ships proteins and lipids received from the endoplasmic reticulum. It consists of stacked membrane-bound sacs called cisternae."}
+{"input":"How many chromosomes do humans have?","output":"Humans have 46 chromosomes arranged in 23 pairs — 22 pairs of autosomes and one pair of sex chromosomes (XX in females, XY in males). Each chromosome contains many genes that code for proteins."}
+{"input":"What is the difference between DNA and RNA?","output":"RNA differs from DNA in several ways: it is typically single-stranded, uses ribose sugar instead of deoxyribose, and contains uracil (U) instead of thymine (T). The three main types are mRNA, tRNA, and rRNA."}
+{"input":"What happens during transcription?","output":"During transcription, RNA polymerase reads the template strand of DNA and synthesizes a complementary mRNA strand. This occurs in the nucleus and is the first stage of protein synthesis."}
+{"input":"What is natural selection?","output":"Natural selection requires variation, heritability, differential reproduction, and adaptation. Individuals with favorable traits produce more offspring, and over generations those traits become more common in the population."}
+{"input":"What is the Hardy-Weinberg principle?","output":"The Hardy-Weinberg principle describes conditions under which allele frequencies remain constant: no mutation, random mating, no selection, large population, and no gene flow. The equation p² + 2pq + q² = 1 predicts genotype frequencies."}
+{"input":"How does energy flow through ecosystems?","output":"Energy flows through ecosystems in one direction: from the sun to producers to consumers to decomposers. Only about 10% of energy is transferred from one trophic level to the next, with the rest lost as heat."}
+{"input":"What is ecological succession?","output":"Ecological succession is the process of change in community species structure over time. Primary succession occurs on bare surfaces starting with pioneer species. Secondary succession occurs where soil remains. Both progress toward a climax community."}
+{"input":"What is epigenetics?","output":"Epigenetics refers to heritable changes in gene expression that do not involve changes to the DNA sequence. Key mechanisms include DNA methylation and histone modification, which alter chromatin structure and gene accessibility."}
+{"input":"What are the stages of mitosis?","output":"Mitosis consists of prophase (chromatin condenses, spindle forms), metaphase (chromosomes align at equator), anaphase (sister chromatids separate), and telophase (nuclear envelopes reform), followed by cytokinesis."}
+{"input":"How does meiosis differ from mitosis?","output":"Meiosis produces four genetically unique haploid cells through two rounds of division, while mitosis produces two genetically identical diploid cells. Crossing over during prophase I increases genetic diversity."}
+{"input":"What is active transport?","output":"Active transport requires energy (ATP) to move substances against their concentration gradient. The sodium-potassium pump pumps 3 Na+ ions out and 2 K+ ions in per ATP molecule."}
+{"input":"What is a population in ecology?","output":"A population is a group of individuals of the same species living in a particular area. Growth follows exponential (unlimited resources) or logistic (limited resources, carrying capacity K) models."}
+{"input":"What is genetic drift?","output":"Genetic drift is the random change in allele frequencies due to chance, especially significant in small populations. Special cases include the bottleneck effect and the founder effect."}
+SFT_EOF
+
+echo "Created SFT training data (20 examples)"
+
+echo ""
+echo "=== SFT Train ==="
+STEP_START=$SECONDS
+"$INSTRUCTOR" finetune --method sft --data "$TEST_DIR/sft_data.jsonl" --project "$TEST_DIR"
+TIME_SFT=$(( SECONDS - STEP_START ))
+echo "--- SFT Train completed in ${TIME_SFT}s ---"
+
+# --- DPO training data ---
 cat > "$TEST_DIR/dpo_data.jsonl" << 'DPO_EOF'
 {"prompt":"What is the basic unit of life?","chosen":"The cell is the basic structural and functional unit of all living organisms. According to cell theory, all living organisms are composed of one or more cells, the cell is the basic unit of life, and all cells arise from pre-existing cells.","rejected":"Atoms are the basic unit of life because everything is made of atoms."}
 {"prompt":"What are the two main types of cells?","chosen":"Cells are broadly classified into prokaryotic and eukaryotic. Prokaryotic cells, found in bacteria and archaea, lack a membrane-bound nucleus. Eukaryotic cells, found in animals, plants, fungi, and protists, contain a well-defined nucleus and specialized organelles.","rejected":"There are plant cells and animal cells, and those are the only two types."}
@@ -476,6 +511,7 @@ printf "  %-14s %ss\n" "Init:" "$TIME_INIT"
 printf "  %-14s %ss\n" "Ingest:" "$TIME_INGEST"
 printf "  %-14s %ss\n" "Model:" "$TIME_MODEL"
 if [ "$LORA" = "yes" ]; then
+printf "  %-14s %ss\n" "SFT Train:" "$TIME_SFT"
 printf "  %-14s %ss\n" "DPO Train:" "$TIME_DPO"
 fi
 printf "  %-14s %ss\n" "Config:" "$TIME_CONFIG"

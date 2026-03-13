@@ -799,6 +799,58 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_lora_adapter_bf16_dtype() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = Device::Cpu;
+        let dtype = DType::BF16;
+
+        // Create base weights in BF16
+        let base_f32 = Tensor::ones(&[4, 8], DType::F32, &device).unwrap();
+        let base_weight = base_f32.to_dtype(DType::BF16).unwrap();
+        let mut base_tensors = std::collections::HashMap::new();
+        base_tensors.insert(
+            "model.layers.0.self_attn.q_proj.weight".to_string(),
+            base_weight,
+        );
+        let base_path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&base_tensors, &base_path).unwrap();
+
+        // Create adapter tensors (F32 — adapter files are typically F32)
+        let lora_a = Tensor::ones(&[2, 8], DType::F32, &device).unwrap();
+        let lora_b = Tensor::ones(&[4, 2], DType::F32, &device).unwrap();
+        let scale = Tensor::from_vec(vec![1.0f32], &[1], &device).unwrap();
+
+        let mut adapter_tensors = std::collections::HashMap::new();
+        adapter_tensors.insert("layers.0.q_proj.lora_a".to_string(), lora_a);
+        adapter_tensors.insert("layers.0.q_proj.lora_b".to_string(), lora_b);
+        adapter_tensors.insert("lora_scale".to_string(), scale);
+
+        let adapter_path = dir.path().join("adapter.safetensors");
+        candle_core::safetensors::save(&adapter_tensors, &adapter_path).unwrap();
+
+        // Merge with BF16 dtype — should not crash (previously failed with BF16→F64 conversion)
+        let vb = merge_lora_adapter(&[base_path], &adapter_path, &device, dtype, false).unwrap();
+
+        // Verify merge produced correct values (1.0 + 2.0 = 3.0)
+        let merged_weight = vb
+            .pp("model.layers.0.self_attn.q_proj")
+            .get((4, 8), "weight")
+            .unwrap();
+
+        let merged_f32 = merged_weight.to_dtype(DType::F32).unwrap();
+        let expected = Tensor::from_vec(vec![3.0f32; 32], &[4, 8], &device).unwrap();
+        let diff = (&merged_f32 - &expected)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .sum_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff < 0.1, "merged BF16 weight values should be ~3.0, diff={diff}");
+    }
+
+    #[test]
     fn test_lora_layer_to_weight_path_all_projections() {
         // q_proj
         assert_eq!(
@@ -1034,7 +1086,7 @@ fn merge_lora_adapter(
         return Ok(VarBuilder::from_tensors(base_tensors, dtype, device));
     }
 
-    // Extract scale from adapter config if present, default to alpha/rank = 16/8 = 2.0
+    // Extract scale from adapter if present; default to 1.0 (safe: applies delta at face value)
     // Handle both scalar (rank 0) and [1]-shaped tensors
     let scale = adapter_data
         .get("lora_scale")
@@ -1042,7 +1094,10 @@ fn merge_lora_adapter(
         .and_then(|t| t.to_vec1::<f32>().ok())
         .and_then(|v| v.into_iter().next())
         .map(|s| s as f64)
-        .unwrap_or(2.0);
+        .unwrap_or_else(|| {
+            eprintln!("LoRA merge: WARNING: adapter missing lora_scale tensor, defaulting to 1.0");
+            1.0
+        });
 
     eprintln!(
         "LoRA merge: found {} LoRA pair(s), scale = {:.4}",
@@ -1068,19 +1123,19 @@ fn merge_lora_adapter(
                 let base_norm = base_weight
                     .sqr()?
                     .sum_all()?
-                    .to_dtype(DType::F64)?
-                    .to_scalar::<f64>()?
+                    .to_dtype(DType::F32)?
+                    .to_scalar::<f32>()?
                     .sqrt();
                 let delta_norm = delta
                     .sqr()?
                     .sum_all()?
-                    .to_dtype(DType::F64)?
-                    .to_scalar::<f64>()?
+                    .to_dtype(DType::F32)?
+                    .to_scalar::<f32>()?
                     .sqrt();
                 let ratio = if base_norm > 0.0 {
                     delta_norm / base_norm
                 } else {
-                    f64::INFINITY
+                    f32::INFINITY
                 };
 
                 if ratio > 1.0 {

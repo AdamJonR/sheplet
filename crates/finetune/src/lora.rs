@@ -16,7 +16,7 @@ impl Default for LoraConfig {
     fn default() -> Self {
         Self {
             rank: 8,
-            alpha: 4.0,
+            alpha: 16.0,
             dropout: 0.0,
         }
     }

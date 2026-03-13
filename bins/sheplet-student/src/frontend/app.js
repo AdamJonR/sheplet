@@ -368,6 +368,13 @@ async function sendMessage() {
                                 assistantContent.className = 'message-blocked';
                             }
                         } catch (_) {}
+                        // Mark "Generating" stage as completed
+                        const genStage = assistantContent.querySelector('.pipeline-stage[data-stage="generating"]');
+                        if (genStage && genStage.classList.contains('active')) {
+                            genStage.classList.remove('active');
+                            genStage.classList.add('completed');
+                            genStage.querySelector('.stage-icon').innerHTML = '&#10003;';
+                        }
                         currentEventType = null;
                         continue;
                     }
@@ -408,11 +415,14 @@ async function sendMessage() {
                     }
 
                     // Default: text token
-                    if (!fullResponse) {
-                        assistantContent.innerHTML = ''; // Remove thinking indicator
-                    }
                     fullResponse += data;
-                    assistantContent.textContent = fullResponse;
+                    let responseDiv = assistantContent.querySelector('.response-text');
+                    if (!responseDiv) {
+                        responseDiv = document.createElement('div');
+                        responseDiv.className = 'response-text';
+                        assistantContent.appendChild(responseDiv);
+                    }
+                    responseDiv.textContent = fullResponse;
                     scrollToBottom();
                     currentEventType = null;
                 }

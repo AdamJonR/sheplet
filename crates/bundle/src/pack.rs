@@ -18,7 +18,7 @@ use crate::keys::Keypair;
 /// - `model/` directory
 /// - `embeddings/` directory
 /// - `database/` directory
-/// - `adapter.lora` file
+/// - `adapter.safetensors` file
 pub fn pack(
     project_dir: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
@@ -54,9 +54,9 @@ pub fn pack(
         }
 
         // Add optional adapter file
-        let adapter_path = project_dir.join("adapter.lora");
+        let adapter_path = project_dir.join("adapter.safetensors");
         if adapter_path.exists() {
-            builder.append_path_with_name(&adapter_path, "adapter.lora")?;
+            builder.append_path_with_name(&adapter_path, "adapter.safetensors")?;
         }
 
         builder.into_inner()?
