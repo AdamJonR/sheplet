@@ -384,7 +384,7 @@ impl PhiGenerator {
         } else {
             vec![]
         };
-        let eos_token_ids = if from_config.is_empty() {
+        let mut eos_token_ids = if from_config.is_empty() {
             let id = tokenizer
                 .token_to_id("<|eot_id|>")
                 .or_else(|| tokenizer.token_to_id("<|end|>"))
@@ -397,6 +397,23 @@ impl PhiGenerator {
         } else {
             from_config
         };
+        // Ensure architecture-specific end-of-turn tokens are in the EOS list
+        let turn_end_tokens: &[&str] = match arch {
+            ModelArch::Phi3 => &["<|end|>"],
+            ModelArch::Llama => &["<|eot_id|>"],
+            ModelArch::Qwen2 => &["<|im_end|>"],
+            ModelArch::Gemma | ModelArch::Gemma2 => &["<end_of_turn>"],
+            ModelArch::Mistral => &["</s>"],
+        };
+        for tok_str in turn_end_tokens {
+            if let Some(id) = tokenizer.token_to_id(tok_str) {
+                if !eos_token_ids.contains(&id) {
+                    eprintln!("Adding turn-end token '{}' (ID {}) to EOS list", tok_str, id);
+                    eos_token_ids.push(id);
+                }
+            }
+        }
+
         eprintln!("EOS token IDs: {:?}", eos_token_ids);
 
         let mut special_token_ids: Vec<u32> = tokenizer
