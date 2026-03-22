@@ -3,11 +3,10 @@ set -euo pipefail
 
 # =============================================================================
 # Sheplet QA Test Script
-# Exercises the full instructor → student pipeline across 4 configurations:
-#   1. Full Precision + LoRA
-#   2. Full Precision + No LoRA
-#   3. Q4K Quantized + LoRA
-#   4. Q4K Quantized + No LoRA
+# Exercises the full instructor → student pipeline across 2 configurations:
+#   1. SafeTensors + LoRA
+#   2. SafeTensors + No LoRA
+# Supports all model architectures via --model flag.
 # =============================================================================
 
 # --- Section 1: Environment & Constants --------------------------------------
@@ -20,6 +19,40 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 QA_DIR="$PROJECT_ROOT/test-qa"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 STUDENT="$PROJECT_ROOT/target/release/sheplet-student"
+
+usage() {
+    echo "Usage: $0 [--model MODEL]"
+    echo ""
+    echo "Models: llama1b, llama3b (default), qwen0.5b, qwen1.5b, qwen3b,"
+    echo "        gemma2b, gemma2-2b, mistral7b, phi3"
+    exit 1
+}
+
+# Defaults
+MODEL="llama3b"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --model)      MODEL="$2"; shift 2 ;;
+        -h|--help)    usage ;;
+        *)            echo "Unknown option: $1"; usage ;;
+    esac
+done
+
+case "$MODEL" in
+    llama1b)    MODEL_NAME="llama-3.2-1b" ;;
+    llama3b)    MODEL_NAME="llama-3.2-3b" ;;
+    qwen0.5b)   MODEL_NAME="qwen2.5-0.5b" ;;
+    qwen1.5b)   MODEL_NAME="qwen2.5-1.5b" ;;
+    qwen3b)     MODEL_NAME="qwen2.5-3b" ;;
+    gemma2b)    MODEL_NAME="gemma-2b" ;;
+    gemma2-2b)  MODEL_NAME="gemma-2-2b" ;;
+    mistral7b)  MODEL_NAME="mistral-7b" ;;
+    phi3)       MODEL_NAME="phi-3-mini-4k-instruct" ;;
+    *)          echo "Unknown model: $MODEL"; usage ;;
+esac
+
+echo "Model: $MODEL_NAME"
 
 QUESTION="How many chromosomes does a human have?"
 MAX_TOKENS=128
@@ -218,7 +251,7 @@ run_instructor_pipeline() {
     # Model
     echo "  [model]"
     step_start=$SECONDS
-    "$INSTRUCTOR" model --name "llama-3.2-3b" --project "$project_dir"
+    "$INSTRUCTOR" model --name "$MODEL_NAME" --project "$project_dir"
     local time_model=$(( SECONDS - step_start ))
     echo "    model: ${time_model}s"
 

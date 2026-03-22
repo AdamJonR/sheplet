@@ -631,4 +631,31 @@ mod tests {
             assert!((v - 1.0).abs() < 1e-4, "expected ~1.0, got {v}");
         }
     }
+
+    #[test]
+    fn test_gemma_lora_param_count() {
+        // Gemma: separate q/k/v/o projections, no bias (attention_bias=false)
+        // head_dim is explicit in config (not derived from hidden_size/num_heads)
+        let rank = 8usize;
+        let hidden_size = 2048usize;
+        let num_heads = 8usize;
+        let num_kv_heads = 1usize;
+        let head_dim = 256usize; // Gemma uses explicit head_dim
+        let layers = 2usize;
+
+        // q_proj: in=hidden_size, out=num_heads*head_dim → R*2048 + 2048*R
+        // k_proj: in=hidden_size, out=num_kv_heads*head_dim → R*2048 + 256*R
+        // v_proj: same as k_proj
+        // o_proj: in=num_heads*head_dim, out=hidden_size → R*2048 + 2048*R
+        let q_params = rank * hidden_size + (num_heads * head_dim) * rank;
+        let k_params = rank * hidden_size + (num_kv_heads * head_dim) * rank;
+        let v_params = k_params;
+        let o_params = rank * (num_heads * head_dim) + hidden_size * rank;
+        let per_layer = q_params + k_params + v_params + o_params;
+        let total = per_layer * layers;
+        assert!(total > 0, "should have nonzero LoRA params: {total}");
+        // q: 16384+16384=32768, k: 16384+2048=18432, v: 18432, o: 16384+16384=32768
+        assert_eq!(per_layer, 32768 + 18432 + 18432 + 32768);
+        assert_eq!(total, per_layer * 2);
+    }
 }

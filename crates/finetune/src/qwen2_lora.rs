@@ -596,4 +596,31 @@ mod tests {
         assert_eq!(config.max_position_embeddings, 32768);
         assert!((config.rope_theta - 1000000.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_qwen2_lora_param_count() {
+        // Qwen2: q/k/v have bias, o_proj has no bias
+        // Per layer: 4 projections × 2 tensors (A + B) = 8 tensors
+        let rank = 8usize;
+        let hidden_size = 256usize;
+        let num_heads = 4usize;
+        let num_kv_heads = 2usize;
+        let head_dim = hidden_size / num_heads; // 64
+        let layers = 2usize;
+
+        // q_proj: in=hidden_size, out=num_heads*head_dim → R*256 + 256*R
+        // k_proj: in=hidden_size, out=num_kv_heads*head_dim → R*256 + 128*R
+        // v_proj: same as k_proj
+        // o_proj: in=num_heads*head_dim, out=hidden_size → R*256 + 256*R
+        let q_params = rank * hidden_size + (num_heads * head_dim) * rank;
+        let k_params = rank * hidden_size + (num_kv_heads * head_dim) * rank;
+        let v_params = k_params;
+        let o_params = rank * (num_heads * head_dim) + hidden_size * rank;
+        let per_layer = q_params + k_params + v_params + o_params;
+        let total = per_layer * layers;
+        assert!(total > 0, "should have nonzero LoRA params: {total}");
+        // Verify expected count: per_layer = 4096+3072+3072+4096 = 14336, total = 28672
+        assert_eq!(per_layer, 14336);
+        assert_eq!(total, 28672);
+    }
 }

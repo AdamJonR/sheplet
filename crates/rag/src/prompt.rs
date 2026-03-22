@@ -497,4 +497,79 @@ mod tests {
         assert!(!prompt.contains("Context from course materials"));
         assert!(prompt.contains("[INST] "));
     }
+
+    #[test]
+    fn test_assemble_prompt_qwen2_with_history() {
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                citations: vec![],
+            },
+            Message {
+                role: Role::Assistant,
+                content: "Hi there!".to_string(),
+                timestamp: "2026-01-01T00:00:01Z".to_string(),
+                citations: vec![],
+            },
+        ];
+        let prompt = assemble_prompt_qwen2("Tutor.", &[], &history, "Next question");
+        assert!(prompt.contains("<|im_start|>user\nHello<|im_end|>"));
+        assert!(prompt.contains("<|im_start|>assistant\nHi there!<|im_end|>"));
+        assert!(prompt.contains("<|im_start|>user\nNext question<|im_end|>"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn test_assemble_prompt_gemma_with_history() {
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                citations: vec![],
+            },
+            Message {
+                role: Role::Assistant,
+                content: "Hi there!".to_string(),
+                timestamp: "2026-01-01T00:00:01Z".to_string(),
+                citations: vec![],
+            },
+        ];
+        let prompt = assemble_prompt_gemma("Tutor.", &[], &history, "Next question");
+        // First user message is merged with system-as-user turn
+        assert!(prompt.contains("Tutor."));
+        assert!(prompt.contains("Hello"));
+        assert!(prompt.contains("<start_of_turn>model\nHi there!<end_of_turn>"));
+        assert!(prompt.contains("<start_of_turn>user\nNext question<end_of_turn>"));
+        assert!(prompt.ends_with("<start_of_turn>model\n"));
+        // Gemma has no system role
+        assert!(!prompt.contains("<start_of_turn>system"));
+    }
+
+    #[test]
+    fn test_assemble_prompt_mistral_with_history() {
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                citations: vec![],
+            },
+            Message {
+                role: Role::Assistant,
+                content: "Hi there!".to_string(),
+                timestamp: "2026-01-01T00:00:01Z".to_string(),
+                citations: vec![],
+            },
+        ];
+        let prompt = assemble_prompt_mistral("Tutor.", &[], &history, "Next question");
+        // First [INST] includes system prompt + first user message
+        assert!(prompt.contains("[INST] Tutor."));
+        assert!(prompt.contains("Hello"));
+        assert!(prompt.contains(" [/INST]"));
+        assert!(prompt.contains("Hi there!</s>"));
+        assert!(prompt.contains("Next question"));
+    }
 }

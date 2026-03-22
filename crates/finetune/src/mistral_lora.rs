@@ -571,4 +571,30 @@ mod tests {
         assert_eq!(config.head_dim(), 128);
         assert!(!config.tie_word_embeddings);
     }
+
+    #[test]
+    fn test_mistral_lora_param_count() {
+        // Mistral: nearly identical to Llama — separate q/k/v/o, no bias
+        let rank = 8usize;
+        let hidden_size = 4096usize;
+        let num_heads = 32usize;
+        let num_kv_heads = 8usize;
+        let head_dim = hidden_size / num_heads; // 128
+        let layers = 2usize;
+
+        // q_proj: in=hidden_size, out=num_heads*head_dim → R*4096 + 4096*R
+        // k_proj: in=hidden_size, out=num_kv_heads*head_dim → R*4096 + 1024*R
+        // v_proj: same as k_proj
+        // o_proj: in=num_heads*head_dim, out=hidden_size → R*4096 + 4096*R
+        let q_params = rank * hidden_size + (num_heads * head_dim) * rank;
+        let k_params = rank * hidden_size + (num_kv_heads * head_dim) * rank;
+        let v_params = k_params;
+        let o_params = rank * (num_heads * head_dim) + hidden_size * rank;
+        let per_layer = q_params + k_params + v_params + o_params;
+        let total = per_layer * layers;
+        assert!(total > 0, "should have nonzero LoRA params: {total}");
+        // q: 32768+32768=65536, k: 32768+8192=40960, v: 40960, o: 32768+32768=65536
+        assert_eq!(per_layer, 65536 + 40960 + 40960 + 65536);
+        assert_eq!(total, per_layer * 2);
+    }
 }

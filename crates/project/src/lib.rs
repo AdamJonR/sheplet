@@ -324,4 +324,58 @@ mod tests {
         manifest.bump_version();
         assert_eq!(manifest.version, "0.1.2");
     }
+
+    #[test]
+    fn test_is_qwen2_model() {
+        // Shortcut names
+        assert!(is_qwen2_model("qwen2.5-0.5b"));
+        assert!(is_qwen2_model("qwen2.5-1.5b"));
+        assert!(is_qwen2_model("qwen2.5-3b"));
+        // HF-style names
+        assert!(is_qwen2_model("Qwen/Qwen2.5-0.5B-Instruct"));
+        assert!(is_qwen2_model("org/qwen2-7b"));
+        // Negatives
+        assert!(!is_qwen2_model("llama-3.2-1b"));
+        assert!(!is_qwen2_model("gemma-2b"));
+    }
+
+    #[test]
+    fn test_is_gemma_model() {
+        // Shortcut names
+        assert!(is_gemma_model("gemma-2b"));
+        assert!(is_gemma_model("gemma-2-2b"));
+        // HF-style names
+        assert!(is_gemma_model("google/gemma-2b-it"));
+        assert!(is_gemma_model("google/Gemma-7b"));
+        // Negatives
+        assert!(!is_gemma_model("llama-3.2-1b"));
+        assert!(!is_gemma_model("mistral-7b"));
+    }
+
+    #[test]
+    fn test_is_mistral_model() {
+        // Shortcut names
+        assert!(is_mistral_model("mistral-7b"));
+        // HF-style names
+        assert!(is_mistral_model("mistralai/Mistral-7B-Instruct-v0.3"));
+        assert!(is_mistral_model("org/mistral-small"));
+        // Negatives
+        assert!(!is_mistral_model("llama-3.2-1b"));
+        assert!(!is_mistral_model("gemma-2b"));
+    }
+
+    #[test]
+    fn test_local_model_source_new_models() {
+        // Qwen2 shortcuts
+        assert_eq!(local_model_source("qwen2.5-0.5b"), Some("Qwen--Qwen2.5-0.5B-Instruct"));
+        assert_eq!(local_model_source("qwen2.5-1.5b"), Some("Qwen--Qwen2.5-1.5B-Instruct"));
+        assert_eq!(local_model_source("qwen2.5-3b"), Some("Qwen--Qwen2.5-3B-Instruct"));
+        // Gemma shortcuts
+        assert_eq!(local_model_source("gemma-2b"), Some("google--gemma-2b-it"));
+        assert_eq!(local_model_source("gemma-2-2b"), Some("google--gemma-2-2b-it"));
+        // Mistral shortcut
+        assert_eq!(local_model_source("mistral-7b"), Some("mistralai--Mistral-7B-Instruct-v0.3"));
+        // Unknown
+        assert_eq!(local_model_source("unknown-model"), None);
+    }
 }

@@ -17,7 +17,10 @@ TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 
 usage() {
-    echo "Usage: $0 [--model llama1b|llama3b] [--lora yes|no]"
+    echo "Usage: $0 [--model MODEL] [--lora yes|no]"
+    echo ""
+    echo "Models: llama1b, llama3b (default), qwen0.5b, qwen1.5b, qwen3b,"
+    echo "        gemma2b, gemma2-2b, mistral7b, phi3"
     echo ""
     echo "Defaults: --model llama3b --lora no"
     exit 1
@@ -37,9 +40,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$MODEL" in
-  llama1b)  MODEL_NAME="llama-3.2-1b" ;;
-  llama3b)  MODEL_NAME="llama-3.2-3b" ;;
-  *)        echo "Unknown model: $MODEL"; usage ;;
+  llama1b)    MODEL_NAME="llama-3.2-1b" ;;
+  llama3b)    MODEL_NAME="llama-3.2-3b" ;;
+  qwen0.5b)   MODEL_NAME="qwen2.5-0.5b" ;;
+  qwen1.5b)   MODEL_NAME="qwen2.5-1.5b" ;;
+  qwen3b)     MODEL_NAME="qwen2.5-3b" ;;
+  gemma2b)    MODEL_NAME="gemma-2b" ;;
+  gemma2-2b)  MODEL_NAME="gemma-2-2b" ;;
+  mistral7b)  MODEL_NAME="mistral-7b" ;;
+  phi3)       MODEL_NAME="phi-3-mini-4k-instruct" ;;
+  *)          echo "Unknown model: $MODEL"; usage ;;
 esac
 
 case "$LORA" in
