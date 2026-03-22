@@ -194,7 +194,17 @@ impl PhiGenerator {
         }
 
         let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
-        let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
+        // Gemma2 requires F32 on GPU: candle's Metal/CUDA softmax runs in native
+        // dtype, but Gemma2's attention logit softcapping compresses dynamic range,
+        // making BF16 softmax precision insufficient. HuggingFace explicitly uses
+        // F32 softmax for Gemma2. Without F32, precision errors compound through
+        // 26 layers, producing corrupted logit distributions (e.g. "46923" instead
+        // of "46" for chromosome count).
+        let dtype = match (device.is_cpu(), &arch) {
+            (true, _) => DType::F32,
+            (_, ModelArch::Gemma2) => DType::F32,
+            (false, _) => DType::BF16,
+        };
         let model = match arch {
             ModelArch::Llama => {
                 let llama_config: ct_llama::LlamaConfig =
@@ -1432,7 +1442,8 @@ fn merge_lora_adapter(
             // Map LoRA layer name to the model weight path
             let weight_path = lora_layer_to_weight_path(layer_name);
             if let Some(base_weight) = base_tensors.get(&weight_path) {
-                let merged = (base_weight + &delta)?;
+                let base_weight = base_weight.to_dtype(dtype)?;
+                let merged = (&base_weight + &delta)?;
 
                 // Compute delta magnitude relative to base weight
                 let base_norm = base_weight
@@ -1504,6 +1515,20 @@ fn merge_lora_adapter(
             )));
         }
     }
+
+    // Ensure all tensors match the target dtype (e.g. base weights may be BF16
+    // but Gemma2 needs F32 for softmax precision)
+    let base_tensors: std::collections::HashMap<String, Tensor> = base_tensors
+        .into_iter()
+        .map(|(name, tensor)| {
+            let tensor = if tensor.dtype() != dtype {
+                tensor.to_dtype(dtype).unwrap_or(tensor)
+            } else {
+                tensor
+            };
+            (name, tensor)
+        })
+        .collect();
 
     Ok(VarBuilder::from_tensors(base_tensors, dtype, device))
 }
