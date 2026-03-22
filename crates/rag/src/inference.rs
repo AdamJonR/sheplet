@@ -251,8 +251,11 @@ impl PhiGenerator {
                 InferenceModel::Qwen2(model)
             }
             ModelArch::Gemma => {
+                // Gemma2 configs from HuggingFace contain both hidden_act and
+                // hidden_activation; candle-transformers rejects this. Keep only one.
+                let config_str_gemma = sanitize_gemma_config(&config_str);
                 let config: ct_gemma::Config =
-                    serde_json::from_str(&config_str)?;
+                    serde_json::from_str(&config_str_gemma)?;
 
                 eprintln!(
                     "Gemma config: hidden_size={}, head_dim={}, layers={}, heads={}, kv_heads={}",
@@ -350,21 +353,23 @@ impl PhiGenerator {
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = last_token_logits(&logits)?;
-        let logits_vec = logits.to_vec1::<f32>()?;
-        let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
-        if self.eos_token_ids.contains(&next_token) {
-            // Log top-5 for diagnostics
+        // Log top-5 raw logits for diagnostics
+        {
+            let logits_vec = logits.to_vec1::<f32>()?;
             let mut indexed: Vec<(usize, f32)> = logits_vec.iter().copied().enumerate().collect();
             indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            eprintln!("WARNING: model produced stop token as very first token (id={next_token})");
-            eprintln!("  Top-5 logits:");
+            eprintln!("First-token top-5 logits:");
             for (i, (idx, val)) in indexed.iter().take(5).enumerate() {
                 let token_str = self.tokenizer.decode(&[*idx as u32], false).unwrap_or_default();
                 eprintln!("    {}: token {} ({:?}) = {:.4}", i + 1, idx, token_str, val);
             }
-            return Ok(generated);
         }
+
+        // Prevent EOS as very first generated token — some small models
+        // (e.g. Qwen2.5-1.5B) produce the stop token immediately otherwise.
+        let logits = mask_eos_logits(&logits, &self.eos_token_ids)?;
+        let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
         generated.push(next_token);
         tokens.push(next_token);
 
@@ -423,12 +428,9 @@ impl TextGenerator for PhiGenerator {
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = last_token_logits(&logits)?;
+        // Prevent EOS as very first generated token
+        let logits = mask_eos_logits(&logits, &self.eos_token_ids)?;
         let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
-
-        if self.eos_token_ids.contains(&first_token) {
-            eprintln!("WARNING: model produced stop token as very first token (id={first_token}) — returning empty response");
-            return Ok(());
-        }
 
         tokens.push(first_token);
 
@@ -482,6 +484,36 @@ impl TextGenerator for PhiGenerator {
     fn clear_cache(&mut self) {
         self.model.clear_kv_cache();
     }
+}
+
+/// Gemma/Gemma2 HuggingFace configs may set both `hidden_act` and
+/// `hidden_activation`. candle-transformers errors when both are present.
+/// Remove `hidden_activation` when `hidden_act` exists (they're always identical).
+fn sanitize_gemma_config(config_str: &str) -> String {
+    if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(config_str) {
+        if let Some(obj) = json.as_object_mut() {
+            if obj.contains_key("hidden_act") && obj.contains_key("hidden_activation") {
+                obj.remove("hidden_activation");
+            }
+        }
+        serde_json::to_string(&json).unwrap_or_else(|_| config_str.to_string())
+    } else {
+        config_str.to_string()
+    }
+}
+
+/// Set logits for EOS token IDs to -inf so they cannot be sampled.
+fn mask_eos_logits(logits: &Tensor, eos_ids: &[u32]) -> candle_core::Result<Tensor> {
+    if eos_ids.is_empty() {
+        return Ok(logits.clone());
+    }
+    let mut logits_vec = logits.to_vec1::<f32>()?;
+    for &id in eos_ids {
+        if (id as usize) < logits_vec.len() {
+            logits_vec[id as usize] = f32::NEG_INFINITY;
+        }
+    }
+    Tensor::from_vec(logits_vec, logits.shape(), logits.device())
 }
 
 /// Extract the last token's logits as a 1D tensor from model output.
@@ -972,6 +1004,62 @@ mod tests {
     #[test]
     fn test_parse_eos_token_ids_invalid_json() {
         assert!(parse_eos_token_ids("not json").is_empty());
+    }
+
+    #[test]
+    fn test_sanitize_gemma_config_removes_hidden_activation() {
+        let input = r#"{"hidden_act":"gelu","hidden_activation":"gelu","hidden_size":2048}"#;
+        let result = sanitize_gemma_config(input);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("hidden_act").is_some());
+        assert!(parsed.get("hidden_activation").is_none());
+        assert!(parsed.get("hidden_size").is_some());
+    }
+
+    #[test]
+    fn test_sanitize_gemma_config_keeps_single_field() {
+        let input = r#"{"hidden_act":"gelu","hidden_size":2048}"#;
+        let result = sanitize_gemma_config(input);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed.get("hidden_act").is_some());
+        assert!(parsed.get("hidden_activation").is_none());
+    }
+
+    #[test]
+    fn test_sanitize_gemma_config_passthrough_invalid_json() {
+        let input = "not json at all";
+        assert_eq!(sanitize_gemma_config(input), input);
+    }
+
+    #[test]
+    fn test_mask_eos_logits_masks_correctly() {
+        let device = Device::Cpu;
+        let logits = Tensor::new(&[1.0f32, 2.0, 3.0, 4.0], &device).unwrap();
+        let masked = mask_eos_logits(&logits, &[1, 3]).unwrap();
+        let vals = masked.to_vec1::<f32>().unwrap();
+        assert_eq!(vals[0], 1.0);
+        assert_eq!(vals[1], f32::NEG_INFINITY);
+        assert_eq!(vals[2], 3.0);
+        assert_eq!(vals[3], f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_mask_eos_logits_empty_ids() {
+        let device = Device::Cpu;
+        let logits = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
+        let masked = mask_eos_logits(&logits, &[]).unwrap();
+        let vals = masked.to_vec1::<f32>().unwrap();
+        assert_eq!(vals, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_mask_eos_logits_out_of_range_id() {
+        let device = Device::Cpu;
+        let logits = Tensor::new(&[1.0f32, 2.0], &device).unwrap();
+        // ID 999 is out of range — should not panic
+        let masked = mask_eos_logits(&logits, &[999]).unwrap();
+        let vals = masked.to_vec1::<f32>().unwrap();
+        assert_eq!(vals, vec![1.0, 2.0]);
     }
 
     #[test]
