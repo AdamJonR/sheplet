@@ -146,7 +146,7 @@ fn run_finetune(
             rag::ModelArch::Phi3 => "Phi-3",
             rag::ModelArch::Llama => "Llama 3.2",
             rag::ModelArch::Qwen2 => "Qwen2",
-            rag::ModelArch::Gemma => "Gemma",
+            rag::ModelArch::Gemma | rag::ModelArch::Gemma2 => "Gemma",
             rag::ModelArch::Mistral => "Mistral",
         };
 
@@ -160,7 +160,7 @@ fn run_finetune(
             rag::ModelArch::Qwen2 => Box::new(
                 finetune::Qwen2LoraTrainer::new(&dirs.model, &lora_config, &device)?,
             ),
-            rag::ModelArch::Gemma => Box::new(
+            rag::ModelArch::Gemma | rag::ModelArch::Gemma2 => Box::new(
                 finetune::GemmaLoraTrainer::new(&dirs.model, &lora_config, &device)?,
             ),
             rag::ModelArch::Mistral => Box::new(

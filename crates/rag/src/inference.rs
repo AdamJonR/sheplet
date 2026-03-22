@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::gemma as ct_gemma;
+use candle_transformers::models::gemma2 as ct_gemma2;
 use candle_transformers::models::llama as ct_llama;
 use candle_transformers::models::mistral as ct_mistral;
 use candle_transformers::models::phi3 as ct_phi3;
@@ -18,6 +19,7 @@ pub enum ModelArch {
     Llama,
     Qwen2,
     Gemma,
+    Gemma2,
     Mistral,
 }
 
@@ -54,7 +56,7 @@ fn detect_model_arch_with_config(model_dir: impl AsRef<Path>) -> Result<(ModelAr
         Some("llama") => ModelArch::Llama,
         Some("qwen2") => ModelArch::Qwen2,
         Some("gemma") => ModelArch::Gemma,
-        Some("gemma2") => ModelArch::Gemma, // Gemma2 uses same inference path
+        Some("gemma2") => ModelArch::Gemma2,
         Some("mistral") => ModelArch::Mistral,
         _ => ModelArch::Phi3,
     };
@@ -88,6 +90,7 @@ enum InferenceModel {
     },
     Qwen2(ct_qwen2::ModelForCausalLM),
     Gemma(ct_gemma::Model),
+    Gemma2(ct_gemma2::Model),
     Mistral(ct_mistral::Model),
 }
 
@@ -100,6 +103,7 @@ impl InferenceModel {
             }
             InferenceModel::Qwen2(m) => m.forward(input, index_pos),
             InferenceModel::Gemma(m) => m.forward(input, index_pos),
+            InferenceModel::Gemma2(m) => m.forward(input, index_pos),
             InferenceModel::Mistral(m) => m.forward(input, index_pos),
         }
     }
@@ -115,6 +119,7 @@ impl InferenceModel {
             }
             InferenceModel::Qwen2(m) => m.clear_kv_cache(),
             InferenceModel::Gemma(m) => m.clear_kv_cache(),
+            InferenceModel::Gemma2(m) => m.clear_kv_cache(),
             InferenceModel::Mistral(m) => m.clear_kv_cache(),
         }
     }
@@ -125,6 +130,7 @@ pub struct PhiGenerator {
     tokenizer: Tokenizer,
     device: Device,
     eos_token_ids: Vec<u32>,
+    special_token_ids: Vec<u32>,
 }
 
 impl PhiGenerator {
@@ -281,6 +287,34 @@ impl PhiGenerator {
                 let model = ct_gemma::Model::new(false, &config, vb)?;
                 InferenceModel::Gemma(model)
             }
+            ModelArch::Gemma2 => {
+                let config: ct_gemma2::Config =
+                    serde_json::from_str(&config_str)?;
+
+                eprintln!(
+                    "Gemma2 config: hidden_size={}, head_dim={}, layers={}, heads={}, kv_heads={}",
+                    config.hidden_size, config.head_dim,
+                    config.num_hidden_layers, config.num_attention_heads,
+                    config.num_key_value_heads,
+                );
+
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
+
+                let model = ct_gemma2::Model::new(false, &config, vb)?;
+                InferenceModel::Gemma2(model)
+            }
             ModelArch::Mistral => {
                 let config: ct_mistral::Config =
                     serde_json::from_str(&config_str)?;
@@ -332,11 +366,21 @@ impl PhiGenerator {
         };
         eprintln!("EOS token IDs: {:?}", eos_token_ids);
 
+        let special_token_ids: Vec<u32> = tokenizer
+            .get_added_vocabulary()
+            .get_added_tokens_decoder()
+            .iter()
+            .filter(|(_, token)| token.special)
+            .map(|(id, _)| *id)
+            .collect();
+        eprintln!("Special token IDs: {} total", special_token_ids.len());
+
         Ok(Self {
             model,
             tokenizer,
             device: device.clone(),
             eos_token_ids,
+            special_token_ids,
         })
     }
 
@@ -368,7 +412,7 @@ impl PhiGenerator {
 
         // Prevent EOS as very first generated token — some small models
         // (e.g. Qwen2.5-1.5B) produce the stop token immediately otherwise.
-        let logits = mask_eos_logits(&logits, &self.eos_token_ids)?;
+        let logits = mask_token_ids(&logits, &self.special_token_ids)?;
         let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
         generated.push(next_token);
         tokens.push(next_token);
@@ -429,7 +473,7 @@ impl TextGenerator for PhiGenerator {
         let logits = self.model.forward(&input, 0)?;
         let logits = last_token_logits(&logits)?;
         // Prevent EOS as very first generated token
-        let logits = mask_eos_logits(&logits, &self.eos_token_ids)?;
+        let logits = mask_token_ids(&logits, &self.special_token_ids)?;
         let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
 
         tokens.push(first_token);
@@ -502,13 +546,13 @@ fn sanitize_gemma_config(config_str: &str) -> String {
     }
 }
 
-/// Set logits for EOS token IDs to -inf so they cannot be sampled.
-fn mask_eos_logits(logits: &Tensor, eos_ids: &[u32]) -> candle_core::Result<Tensor> {
-    if eos_ids.is_empty() {
+/// Set logits for the given token IDs to -inf so they cannot be sampled.
+fn mask_token_ids(logits: &Tensor, token_ids: &[u32]) -> candle_core::Result<Tensor> {
+    if token_ids.is_empty() {
         return Ok(logits.clone());
     }
     let mut logits_vec = logits.to_vec1::<f32>()?;
-    for &id in eos_ids {
+    for &id in token_ids {
         if (id as usize) < logits_vec.len() {
             logits_vec[id as usize] = f32::NEG_INFINITY;
         }
@@ -548,9 +592,10 @@ fn sample_token(
 ) -> Result<u32> {
     let mut logits = logits.to_vec1::<f32>()?;
 
-    // Apply repetition penalty to previously generated tokens
-    for &token_id in generated_tokens {
-        if let Some(logit) = logits.get_mut(token_id as usize) {
+    // Apply repetition penalty once per unique token (not per occurrence)
+    let unique_tokens: std::collections::HashSet<u32> = generated_tokens.iter().copied().collect();
+    for token_id in &unique_tokens {
+        if let Some(logit) = logits.get_mut(*token_id as usize) {
             if *logit > 0.0 {
                 *logit /= repetition_penalty as f32;
             } else {
@@ -665,7 +710,7 @@ mod tests {
         )
         .unwrap();
         let arch = detect_model_arch(dir.path()).unwrap();
-        assert_eq!(arch, ModelArch::Gemma, "gemma2 should map to Gemma arch");
+        assert_eq!(arch, ModelArch::Gemma2, "gemma2 should map to Gemma2 arch");
     }
 
     #[test]
@@ -1032,10 +1077,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mask_eos_logits_masks_correctly() {
+    fn test_mask_token_ids_masks_correctly() {
         let device = Device::Cpu;
         let logits = Tensor::new(&[1.0f32, 2.0, 3.0, 4.0], &device).unwrap();
-        let masked = mask_eos_logits(&logits, &[1, 3]).unwrap();
+        let masked = mask_token_ids(&logits, &[1, 3]).unwrap();
         let vals = masked.to_vec1::<f32>().unwrap();
         assert_eq!(vals[0], 1.0);
         assert_eq!(vals[1], f32::NEG_INFINITY);
@@ -1044,20 +1089,20 @@ mod tests {
     }
 
     #[test]
-    fn test_mask_eos_logits_empty_ids() {
+    fn test_mask_token_ids_empty_ids() {
         let device = Device::Cpu;
         let logits = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
-        let masked = mask_eos_logits(&logits, &[]).unwrap();
+        let masked = mask_token_ids(&logits, &[]).unwrap();
         let vals = masked.to_vec1::<f32>().unwrap();
         assert_eq!(vals, vec![1.0, 2.0, 3.0]);
     }
 
     #[test]
-    fn test_mask_eos_logits_out_of_range_id() {
+    fn test_mask_token_ids_out_of_range_id() {
         let device = Device::Cpu;
         let logits = Tensor::new(&[1.0f32, 2.0], &device).unwrap();
         // ID 999 is out of range — should not panic
-        let masked = mask_eos_logits(&logits, &[999]).unwrap();
+        let masked = mask_token_ids(&logits, &[999]).unwrap();
         let vals = masked.to_vec1::<f32>().unwrap();
         assert_eq!(vals, vec![1.0, 2.0]);
     }

@@ -452,8 +452,8 @@ fi
 mkdir -p "$QA_DIR"
 
 # Check model availability and build run list
-declare -a RUN_MODELS
-declare -a SKIP_MODELS
+declare -a RUN_MODELS=()
+declare -a SKIP_MODELS=()
 
 for shortcut in "${ALL_SHORTCUTS[@]}"; do
     model_dir_name=$(resolve_model_dir "$shortcut")
@@ -479,16 +479,16 @@ if [ ${#SKIP_MODELS[@]} -gt 0 ]; then
 fi
 
 # Arrays to store results
-declare -a RESULT_LABELS
-declare -a RESULT_STATUSES
-declare -a RESULT_RESPONSES
-declare -a RESULT_LOAD_TIMES
-declare -a RESULT_CHAT_TIMES
-declare -a RESULT_PIPELINE_TIMES
-declare -a RESULT_STDERRS
+declare -a RESULT_LABELS=()
+declare -a RESULT_STATUSES=()
+declare -a RESULT_RESPONSES=()
+declare -a RESULT_LOAD_TIMES=()
+declare -a RESULT_CHAT_TIMES=()
+declare -a RESULT_PIPELINE_TIMES=()
+declare -a RESULT_STDERRS=()
 
 # Add skip entries for unavailable models
-for shortcut in "${SKIP_MODELS[@]}"; do
+for shortcut in ${SKIP_MODELS[@]+"${SKIP_MODELS[@]}"}; do
     for config in "${CONFIGS[@]}"; do
         IFS='|' read -r label do_lora <<< "$config"
         RESULT_LABELS+=("$shortcut | $label")
@@ -502,7 +502,7 @@ for shortcut in "${SKIP_MODELS[@]}"; do
 done
 
 # Run tests for each available model
-for shortcut in "${RUN_MODELS[@]}"; do
+for shortcut in ${RUN_MODELS[@]+"${RUN_MODELS[@]}"}; do
     MODEL_NAME=$(resolve_model_name "$shortcut")
 
     echo ""
@@ -619,7 +619,7 @@ done
 pass_count=0
 fail_count=0
 skip_count=0
-for status in "${RESULT_STATUSES[@]}"; do
+for status in ${RESULT_STATUSES[@]+"${RESULT_STATUSES[@]}"}; do
     case "$status" in
         PASS) pass_count=$(( pass_count + 1 )) ;;
         FAIL) fail_count=$(( fail_count + 1 )) ;;

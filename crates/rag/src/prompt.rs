@@ -328,7 +328,7 @@ pub fn assemble_prompt_for_arch(
         ModelArch::Phi3 => assemble_prompt(system_prompt, results, history, question),
         ModelArch::Llama => assemble_prompt_llama(system_prompt, results, history, question),
         ModelArch::Qwen2 => assemble_prompt_qwen2(system_prompt, results, history, question),
-        ModelArch::Gemma => assemble_prompt_gemma(system_prompt, results, history, question),
+        ModelArch::Gemma | ModelArch::Gemma2 => assemble_prompt_gemma(system_prompt, results, history, question),
         ModelArch::Mistral => assemble_prompt_mistral(system_prompt, results, history, question),
     }
 }
