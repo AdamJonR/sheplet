@@ -3,10 +3,11 @@ set -euo pipefail
 
 # =============================================================================
 # Sheplet QA Test Script
-# Exercises the full instructor → student pipeline across 2 configurations:
+# Exercises the full instructor → student pipeline across all supported models,
+# each with 2 configurations:
 #   1. SafeTensors + LoRA
 #   2. SafeTensors + No LoRA
-# Supports all model architectures via --model flag.
+# Use --model to test a single model instead.
 # =============================================================================
 
 # --- Section 1: Environment & Constants --------------------------------------
@@ -23,13 +24,15 @@ STUDENT="$PROJECT_ROOT/target/release/sheplet-student"
 usage() {
     echo "Usage: $0 [--model MODEL]"
     echo ""
-    echo "Models: llama1b, llama3b (default), qwen0.5b, qwen1.5b, qwen3b,"
+    echo "Models: llama1b, llama3b, qwen0.5b, qwen1.5b, qwen3b,"
     echo "        gemma2b, gemma2-2b, mistral7b, phi3"
+    echo ""
+    echo "Default: test all models (with and without LoRA)"
     exit 1
 }
 
 # Defaults
-MODEL="llama3b"
+MODEL="all"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,20 +42,51 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-case "$MODEL" in
-    llama1b)    MODEL_NAME="llama-3.2-1b" ;;
-    llama3b)    MODEL_NAME="llama-3.2-3b" ;;
-    qwen0.5b)   MODEL_NAME="qwen2.5-0.5b" ;;
-    qwen1.5b)   MODEL_NAME="qwen2.5-1.5b" ;;
-    qwen3b)     MODEL_NAME="qwen2.5-3b" ;;
-    gemma2b)    MODEL_NAME="gemma-2b" ;;
-    gemma2-2b)  MODEL_NAME="gemma-2-2b" ;;
-    mistral7b)  MODEL_NAME="mistral-7b" ;;
-    phi3)       MODEL_NAME="phi-3-mini-4k-instruct" ;;
-    *)          echo "Unknown model: $MODEL"; usage ;;
-esac
+# Map shortcut to full model name
+resolve_model_name() {
+    local shortcut="$1"
+    case "$shortcut" in
+        llama1b)    echo "llama-3.2-1b" ;;
+        llama3b)    echo "llama-3.2-3b" ;;
+        qwen0.5b)   echo "qwen2.5-0.5b" ;;
+        qwen1.5b)   echo "qwen2.5-1.5b" ;;
+        qwen3b)     echo "qwen2.5-3b" ;;
+        gemma2b)    echo "gemma-2b" ;;
+        gemma2-2b)  echo "gemma-2-2b" ;;
+        mistral7b)  echo "mistral-7b" ;;
+        phi3)       echo "phi-3-mini-4k-instruct" ;;
+        *)          echo ""; return 1 ;;
+    esac
+}
 
-echo "Model: $MODEL_NAME"
+# Map shortcut to downloaded-models directory name
+resolve_model_dir() {
+    local shortcut="$1"
+    case "$shortcut" in
+        llama1b)    echo "meta-llama--Llama-3.2-1B-Instruct" ;;
+        llama3b)    echo "meta-llama--Llama-3.2-3B-Instruct" ;;
+        qwen0.5b)   echo "Qwen--Qwen2.5-0.5B-Instruct" ;;
+        qwen1.5b)   echo "Qwen--Qwen2.5-1.5B-Instruct" ;;
+        qwen3b)     echo "Qwen--Qwen2.5-3B-Instruct" ;;
+        gemma2b)    echo "google--gemma-2b-it" ;;
+        gemma2-2b)  echo "google--gemma-2-2b-it" ;;
+        mistral7b)  echo "mistralai--Mistral-7B-Instruct-v0.3" ;;
+        phi3)       echo "microsoft--Phi-3-mini-4k-instruct" ;;
+        *)          echo "" ;;
+    esac
+}
+
+# Build the list of models to test
+ALL_SHORTCUTS=(llama1b llama3b qwen0.5b qwen1.5b qwen3b gemma2b gemma2-2b mistral7b phi3)
+
+if [ "$MODEL" != "all" ]; then
+    # Validate the model shortcut
+    if ! resolve_model_name "$MODEL" >/dev/null 2>&1; then
+        echo "Unknown model: $MODEL"
+        usage
+    fi
+    ALL_SHORTCUTS=("$MODEL")
+fi
 
 QUESTION="How many chromosomes does a human have?"
 MAX_TOKENS=128
@@ -226,6 +260,7 @@ DPO_EOF
 run_instructor_pipeline() {
     local project_dir="$1"
     local do_lora="$2"
+    local model_name="$3"
     local bundle_path="$project_dir/bundle.sheplet"
 
     # Init
@@ -251,7 +286,7 @@ run_instructor_pipeline() {
     # Model
     echo "  [model]"
     step_start=$SECONDS
-    "$INSTRUCTOR" model --name "$MODEL_NAME" --project "$project_dir"
+    "$INSTRUCTOR" model --name "$model_name" --project "$project_dir"
     local time_model=$(( SECONDS - step_start ))
     echo "    model: ${time_model}s"
 
@@ -416,6 +451,33 @@ if [ -d "$QA_DIR" ]; then
 fi
 mkdir -p "$QA_DIR"
 
+# Check model availability and build run list
+declare -a RUN_MODELS
+declare -a SKIP_MODELS
+
+for shortcut in "${ALL_SHORTCUTS[@]}"; do
+    model_dir_name=$(resolve_model_dir "$shortcut")
+    model_path="$PROJECT_ROOT/downloaded-models/$model_dir_name"
+    if [ -d "$model_path" ]; then
+        RUN_MODELS+=("$shortcut")
+    else
+        SKIP_MODELS+=("$shortcut")
+        echo "SKIP: $shortcut — not found at downloaded-models/$model_dir_name"
+    fi
+done
+
+if [ ${#RUN_MODELS[@]} -eq 0 ]; then
+    echo ""
+    echo "No models available to test. Download models to downloaded-models/ first."
+    exit 1
+fi
+
+echo ""
+echo "Models to test: ${RUN_MODELS[*]}"
+if [ ${#SKIP_MODELS[@]} -gt 0 ]; then
+    echo "Models skipped (not downloaded): ${SKIP_MODELS[*]}"
+fi
+
 # Arrays to store results
 declare -a RESULT_LABELS
 declare -a RESULT_STATUSES
@@ -425,66 +487,90 @@ declare -a RESULT_CHAT_TIMES
 declare -a RESULT_PIPELINE_TIMES
 declare -a RESULT_STDERRS
 
-config_num=0
-for config in "${CONFIGS[@]}"; do
-    config_num=$(( config_num + 1 ))
-
-    IFS='|' read -r label do_lora <<< "$config"
-
-    echo ""
-    echo "================================================================"
-    echo "  Config $config_num/${#CONFIGS[@]}: $label"
-    echo "  lora=$do_lora"
-    echo "================================================================"
-
-    project_dir="$QA_DIR/config-$config_num"
-
-    # Run instructor pipeline
-    echo ""
-    echo "--- Instructor Pipeline ---"
-    pipeline_start=$SECONDS
-    if run_instructor_pipeline "$project_dir" "$do_lora"; then
-        echo "  Pipeline completed in ${RESULT_PIPELINE_TIME}s"
-    else
-        echo "  Pipeline FAILED"
-        RESULT_LABELS+=("$label")
-        RESULT_STATUSES+=("FAIL")
-        RESULT_RESPONSES+=("Pipeline failed")
+# Add skip entries for unavailable models
+for shortcut in "${SKIP_MODELS[@]}"; do
+    for config in "${CONFIGS[@]}"; do
+        IFS='|' read -r label do_lora <<< "$config"
+        RESULT_LABELS+=("$shortcut | $label")
+        RESULT_STATUSES+=("SKIP")
+        RESULT_RESPONSES+=("Model not downloaded")
         RESULT_LOAD_TIMES+=(0)
         RESULT_CHAT_TIMES+=(0)
         RESULT_PIPELINE_TIMES+=(0)
         RESULT_STDERRS+=("")
-        continue
-    fi
+    done
+done
 
-    # Determine no-adapter flag
-    no_adapter="no"
-    if [ "$do_lora" = "no" ]; then
-        no_adapter="yes"
-    fi
+# Run tests for each available model
+for shortcut in "${RUN_MODELS[@]}"; do
+    MODEL_NAME=$(resolve_model_name "$shortcut")
 
-    # Run student query
     echo ""
-    echo "--- Student Query ---"
-    if run_student_query "$RESULT_BUNDLE_PATH" "$RESULT_FINGERPRINT" "$no_adapter"; then
-        query_status="ok"
-    else
-        query_status="error"
-    fi
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "  Model: $shortcut ($MODEL_NAME)"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
 
-    # Determine pass/fail
-    local_status="FAIL"
-    if [ "$query_status" = "ok" ] && [ -n "$RESULT_RESPONSE" ] && [ "$RESULT_RESPONSE" != "PARSE_ERROR" ] && [ "$RESULT_BLOCKED" != "true" ]; then
-        local_status="PASS"
-    fi
+    config_num=0
+    for config in "${CONFIGS[@]}"; do
+        config_num=$(( config_num + 1 ))
 
-    RESULT_LABELS+=("$label")
-    RESULT_STATUSES+=("$local_status")
-    RESULT_RESPONSES+=("$RESULT_RESPONSE")
-    RESULT_LOAD_TIMES+=("$RESULT_LOAD_TIME")
-    RESULT_CHAT_TIMES+=("$RESULT_CHAT_TIME")
-    RESULT_PIPELINE_TIMES+=("$RESULT_PIPELINE_TIME")
-    RESULT_STDERRS+=("$RESULT_STDERR")
+        IFS='|' read -r label do_lora <<< "$config"
+        full_label="$shortcut | $label"
+
+        echo ""
+        echo "================================================================"
+        echo "  Config $config_num/${#CONFIGS[@]}: $full_label"
+        echo "  lora=$do_lora"
+        echo "================================================================"
+
+        project_dir="$QA_DIR/$shortcut/config-$config_num"
+
+        # Run instructor pipeline
+        echo ""
+        echo "--- Instructor Pipeline ---"
+        if run_instructor_pipeline "$project_dir" "$do_lora" "$MODEL_NAME"; then
+            echo "  Pipeline completed in ${RESULT_PIPELINE_TIME}s"
+        else
+            echo "  Pipeline FAILED"
+            RESULT_LABELS+=("$full_label")
+            RESULT_STATUSES+=("FAIL")
+            RESULT_RESPONSES+=("Pipeline failed")
+            RESULT_LOAD_TIMES+=(0)
+            RESULT_CHAT_TIMES+=(0)
+            RESULT_PIPELINE_TIMES+=(0)
+            RESULT_STDERRS+=("")
+            continue
+        fi
+
+        # Determine no-adapter flag
+        no_adapter="no"
+        if [ "$do_lora" = "no" ]; then
+            no_adapter="yes"
+        fi
+
+        # Run student query
+        echo ""
+        echo "--- Student Query ---"
+        if run_student_query "$RESULT_BUNDLE_PATH" "$RESULT_FINGERPRINT" "$no_adapter"; then
+            query_status="ok"
+        else
+            query_status="error"
+        fi
+
+        # Determine pass/fail
+        local_status="FAIL"
+        if [ "$query_status" = "ok" ] && [ -n "$RESULT_RESPONSE" ] && [ "$RESULT_RESPONSE" != "PARSE_ERROR" ] && [ "$RESULT_BLOCKED" != "true" ]; then
+            local_status="PASS"
+        fi
+
+        RESULT_LABELS+=("$full_label")
+        RESULT_STATUSES+=("$local_status")
+        RESULT_RESPONSES+=("$RESULT_RESPONSE")
+        RESULT_LOAD_TIMES+=("$RESULT_LOAD_TIME")
+        RESULT_CHAT_TIMES+=("$RESULT_CHAT_TIME")
+        RESULT_PIPELINE_TIMES+=("$RESULT_PIPELINE_TIME")
+        RESULT_STDERRS+=("$RESULT_STDERR")
+    done
 done
 
 # --- Section 5: Summary table -----------------------------------------------
@@ -500,9 +586,14 @@ echo "  Build time: ${TIME_BUILD}s"
 echo "========================================================================"
 
 for i in "${!RESULT_LABELS[@]}"; do
-    config_idx=$(( i + 1 ))
     echo ""
-    echo "--- Config $config_idx: ${RESULT_LABELS[$i]} [${RESULT_STATUSES[$i]}] ---"
+    echo "--- ${RESULT_LABELS[$i]} [${RESULT_STATUSES[$i]}] ---"
+
+    if [ "${RESULT_STATUSES[$i]}" = "SKIP" ]; then
+        echo "  (model not downloaded)"
+        continue
+    fi
+
     echo "  Pipeline: ${RESULT_PIPELINE_TIMES[$i]}s | Bundle Load: ${RESULT_LOAD_TIMES[$i]}s | Chat: ${RESULT_CHAT_TIMES[$i]}s"
     echo "  Response:"
 
@@ -527,17 +618,18 @@ done
 # Summary line
 pass_count=0
 fail_count=0
+skip_count=0
 for status in "${RESULT_STATUSES[@]}"; do
-    if [ "$status" = "PASS" ]; then
-        pass_count=$(( pass_count + 1 ))
-    else
-        fail_count=$(( fail_count + 1 ))
-    fi
+    case "$status" in
+        PASS) pass_count=$(( pass_count + 1 )) ;;
+        FAIL) fail_count=$(( fail_count + 1 )) ;;
+        SKIP) skip_count=$(( skip_count + 1 )) ;;
+    esac
 done
 
 echo ""
 echo "========================================================================"
-echo "  Total: $pass_count PASS / $fail_count FAIL | Elapsed: ${TOTAL_ELAPSED}s"
+echo "  Total: $pass_count PASS / $fail_count FAIL / $skip_count SKIP | Elapsed: ${TOTAL_ELAPSED}s"
 echo "========================================================================"
 echo ""
 
@@ -546,4 +638,8 @@ if [ "$fail_count" -gt 0 ]; then
     exit 1
 fi
 
-echo "All configs passed!"
+if [ "$pass_count" -gt 0 ]; then
+    echo "All tested configs passed!"
+else
+    echo "No configs were tested (all models skipped)."
+fi

@@ -141,6 +141,7 @@ pub fn local_model_source(name: &str) -> Option<&'static str> {
         "gemma-2b" => Some("google--gemma-2b-it"),
         "gemma-2-2b" => Some("google--gemma-2-2b-it"),
         "mistral-7b" => Some("mistralai--Mistral-7B-Instruct-v0.3"),
+        "phi-3-mini-4k-instruct" | "phi3" => Some("microsoft--Phi-3-mini-4k-instruct"),
         _ => None,
     }
 }
@@ -375,6 +376,9 @@ mod tests {
         assert_eq!(local_model_source("gemma-2-2b"), Some("google--gemma-2-2b-it"));
         // Mistral shortcut
         assert_eq!(local_model_source("mistral-7b"), Some("mistralai--Mistral-7B-Instruct-v0.3"));
+        // Phi-3 shortcuts
+        assert_eq!(local_model_source("phi-3-mini-4k-instruct"), Some("microsoft--Phi-3-mini-4k-instruct"));
+        assert_eq!(local_model_source("phi3"), Some("microsoft--Phi-3-mini-4k-instruct"));
         // Unknown
         assert_eq!(local_model_source("unknown-model"), None);
     }
