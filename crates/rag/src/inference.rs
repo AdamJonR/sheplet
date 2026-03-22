@@ -125,12 +125,45 @@ impl InferenceModel {
     }
 }
 
+/// Per-architecture sampling configuration.
+struct SamplingConfig {
+    temperature: f64,
+    top_p: f64,
+    repetition_penalty: f64,
+}
+
+impl SamplingConfig {
+    fn for_arch(arch: ModelArch) -> Self {
+        match arch {
+            ModelArch::Qwen2 => Self {
+                temperature: 0.5,
+                top_p: 0.85,
+                repetition_penalty: 1.05,
+            },
+            ModelArch::Gemma | ModelArch::Gemma2 => Self {
+                temperature: 0.5,
+                top_p: 0.9,
+                repetition_penalty: 1.05,
+            },
+            _ => Self {
+                temperature: 0.6,
+                top_p: 0.9,
+                repetition_penalty: 1.1,
+            },
+        }
+    }
+}
+
 pub struct PhiGenerator {
     model: InferenceModel,
     tokenizer: Tokenizer,
     device: Device,
     eos_token_ids: Vec<u32>,
     special_token_ids: Vec<u32>,
+    non_eos_special_ids: Vec<u32>,
+    stop_sequences: Vec<String>,
+    sampling: SamplingConfig,
+    max_context_tokens: usize,
 }
 
 impl PhiGenerator {
@@ -366,14 +399,60 @@ impl PhiGenerator {
         };
         eprintln!("EOS token IDs: {:?}", eos_token_ids);
 
-        let special_token_ids: Vec<u32> = tokenizer
+        let mut special_token_ids: Vec<u32> = tokenizer
             .get_added_vocabulary()
             .get_added_tokens_decoder()
             .iter()
             .filter(|(_, token)| token.special)
             .map(|(id, _)| *id)
             .collect();
+
+        // Also mask tool/FIM tokens that may not be marked "special" in tokenizer
+        let extra_mask_tokens = [
+            "<tool_call>", "</tool_call>", "<|tool_sep|>",
+            "<|tool_start|>", "<|tool_end|>",
+            "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>",
+            "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>",
+        ];
+        for tok_str in &extra_mask_tokens {
+            if let Some(id) = tokenizer.token_to_id(tok_str) {
+                if !special_token_ids.contains(&id) {
+                    special_token_ids.push(id);
+                }
+            }
+        }
         eprintln!("Special token IDs: {} total", special_token_ids.len());
+
+        // Build non-EOS special IDs for masking on all generated tokens
+        let non_eos_special_ids: Vec<u32> = special_token_ids
+            .iter()
+            .copied()
+            .filter(|id| !eos_token_ids.contains(id))
+            .collect();
+
+        // Per-architecture stop sequences (text-level detection)
+        let stop_sequences = match arch {
+            ModelArch::Phi3 => vec![
+                "<|user|>".to_string(), "<|system|>".to_string(),
+                "### Question".to_string(), "###".to_string(),
+            ],
+            ModelArch::Llama => vec!["<|start_header_id|>".to_string()],
+            ModelArch::Qwen2 => vec![
+                "<|im_start|>".to_string(), "<tool_call>".to_string(),
+            ],
+            ModelArch::Gemma | ModelArch::Gemma2 => vec!["<start_of_turn>".to_string()],
+            ModelArch::Mistral => vec!["[INST]".to_string()],
+        };
+
+        // Read max_position_embeddings from config.json for context window guard
+        let max_context_tokens = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&config_str) {
+            json.get("max_position_embeddings")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(4096)
+        } else {
+            4096
+        };
 
         Ok(Self {
             model,
@@ -381,6 +460,10 @@ impl PhiGenerator {
             device: device.clone(),
             eos_token_ids,
             special_token_ids,
+            non_eos_special_ids,
+            stop_sequences,
+            sampling: SamplingConfig::for_arch(arch),
+            max_context_tokens,
         })
     }
 
@@ -393,6 +476,25 @@ impl PhiGenerator {
         let input_ids = encoding.get_ids();
         let mut tokens: Vec<u32> = input_ids.to_vec();
         let mut generated = Vec::new();
+
+        // Context window safety guard: warn if prompt is too long
+        let headroom = 64;
+        if tokens.len() + max_tokens + headroom > self.max_context_tokens {
+            let available = self.max_context_tokens.saturating_sub(max_tokens + headroom);
+            if tokens.len() > available {
+                eprintln!(
+                    "WARNING: prompt ({} tokens) exceeds safe limit ({} tokens for context window {}). Truncating.",
+                    tokens.len(), available, self.max_context_tokens
+                );
+                // Truncate from the middle, preserving start (system prompt) and end (question)
+                let keep_start = available / 2;
+                let keep_end = available - keep_start;
+                let end_start = tokens.len() - keep_end;
+                let mut truncated = tokens[..keep_start].to_vec();
+                truncated.extend_from_slice(&tokens[end_start..]);
+                tokens = truncated;
+            }
+        }
 
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
@@ -410,10 +512,11 @@ impl PhiGenerator {
             }
         }
 
-        // Prevent EOS as very first generated token — some small models
-        // (e.g. Qwen2.5-1.5B) produce the stop token immediately otherwise.
+        let SamplingConfig { temperature, top_p, repetition_penalty } = self.sampling;
+
+        // Prevent ALL special tokens (including EOS) as very first generated token
         let logits = mask_token_ids(&logits, &self.special_token_ids)?;
-        let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
+        let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &[])?;
         generated.push(next_token);
         tokens.push(next_token);
 
@@ -422,13 +525,29 @@ impl PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &generated)?;
+            // Mask non-EOS special tokens on ALL generated tokens
+            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
+            let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
                 break;
             }
             generated.push(next_token);
             tokens.push(next_token);
+
+            // Check text-level stop sequences
+            if !self.stop_sequences.is_empty() {
+                if let Ok(text) = self.tokenizer.decode(&generated, true) {
+                    if let Some(pos) = check_stop_sequences(&text, &self.stop_sequences) {
+                        // Re-encode the truncated text to get the right token count
+                        let truncated_text = &text[..pos];
+                        if let Ok(enc) = self.tokenizer.encode(truncated_text, false) {
+                            generated = enc.get_ids().to_vec();
+                        }
+                        break;
+                    }
+                }
+            }
         }
 
         Ok(generated)
@@ -442,7 +561,7 @@ impl TextGenerator for PhiGenerator {
             .tokenizer
             .decode(&tokens, true)
             ?;
-        Ok(text)
+        Ok(clean_output(&text))
     }
 
     fn generate_stream(
@@ -469,12 +588,14 @@ impl TextGenerator for PhiGenerator {
         let input_ids = encoding.get_ids();
         let mut tokens: Vec<u32> = input_ids.to_vec();
 
+        let SamplingConfig { temperature, top_p, repetition_penalty } = self.sampling;
+
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
         let logits = last_token_logits(&logits)?;
-        // Prevent EOS as very first generated token
+        // Prevent ALL special tokens (including EOS) as very first generated token
         let logits = mask_token_ids(&logits, &self.special_token_ids)?;
-        let first_token = sample_token(&logits, 0.7, 0.9, 1.15, &[])?;
+        let first_token = sample_token(&logits, temperature, top_p, repetition_penalty, &[])?;
 
         tokens.push(first_token);
 
@@ -496,7 +617,9 @@ impl TextGenerator for PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            let next_token = sample_token(&logits, 0.7, 0.9, 1.15, &all_generated)?;
+            // Mask non-EOS special tokens on ALL generated tokens
+            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
+            let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &all_generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
                 break;
@@ -507,6 +630,14 @@ impl TextGenerator for PhiGenerator {
 
             match tokenizer.decode(&all_generated, true) {
                 Ok(full_text) => {
+                    // Check text-level stop sequences
+                    if let Some(pos) = check_stop_sequences(&full_text, &self.stop_sequences) {
+                        // Send any remaining text up to the stop point
+                        if pos > prev_text.len() {
+                            let _ = tx.send(Ok(full_text[prev_text.len()..pos].to_string()));
+                        }
+                        break;
+                    }
                     if full_text.len() > prev_text.len() {
                         let new_part = full_text[prev_text.len()..].to_string();
                         if tx.send(Ok(new_part)).is_err() {
@@ -528,6 +659,53 @@ impl TextGenerator for PhiGenerator {
     fn clear_cache(&mut self) {
         self.model.clear_kv_cache();
     }
+}
+
+/// Check if the generated text contains any stop sequence.
+/// Returns the byte offset of the first match, or None.
+fn check_stop_sequences(text: &str, stop_seqs: &[String]) -> Option<usize> {
+    stop_seqs
+        .iter()
+        .filter_map(|seq| text.find(seq.as_str()))
+        .min()
+}
+
+/// Clean up model output: trim, remove leaked special tokens, fix stuttering prefix.
+fn clean_output(text: &str) -> String {
+    let mut result = text.trim().to_string();
+
+    // Remove residual special token text that leaked through decoding
+    let leaked_tokens = [
+        "<|im_start|>", "<|im_end|>", "<|endoftext|>",
+        "<start_of_turn>", "<end_of_turn>",
+        "<|user|>", "<|assistant|>", "<|system|>", "<|end|>",
+        "<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>",
+        "<tool_call>", "</tool_call>",
+    ];
+    for tok in &leaked_tokens {
+        result = result.replace(tok, "");
+    }
+
+    // Detect and remove stuttering prefix:
+    // e.g. "According\nBased\nAccording to..." -> "According to..."
+    let lines: Vec<&str> = result.lines().collect();
+    if lines.len() >= 3 {
+        // Check if first few lines are single-word false starts
+        let mut stutter_end = 0;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if i < lines.len() - 1 && !trimmed.is_empty() && trimmed.split_whitespace().count() <= 2 && !trimmed.ends_with('.') {
+                stutter_end = i + 1;
+            } else {
+                break;
+            }
+        }
+        if stutter_end > 0 && stutter_end < lines.len() {
+            result = lines[stutter_end..].join("\n");
+        }
+    }
+
+    result.trim().to_string()
 }
 
 /// Gemma/Gemma2 HuggingFace configs may set both `hidden_act` and
@@ -1207,6 +1385,17 @@ fn merge_lora_adapter(
             eprintln!("LoRA merge: WARNING: adapter missing lora_scale tensor, defaulting to 1.0");
             1.0
         });
+
+    // Cap effective scale at 1.0 to prevent outsized impact on small models
+    let scale = if scale > 1.0 {
+        eprintln!(
+            "LoRA merge: WARNING: clamping scale {:.4} to 1.0 to prevent weight corruption",
+            scale
+        );
+        1.0
+    } else {
+        scale
+    };
 
     eprintln!(
         "LoRA merge: found {} LoRA pair(s), scale = {:.4}",

@@ -187,14 +187,17 @@ pub fn assemble_prompt_gemma(
     let mut prompt = String::with_capacity(estimated_size);
 
     // Gemma has no system role — fold system prompt into first user turn
+    // Use structural cues so small models can distinguish instructions/context/question
     prompt.push_str("<start_of_turn>user\n");
+    prompt.push_str("Instructions: ");
     prompt.push_str(system_prompt);
 
     if !results.is_empty() {
-        prompt.push_str("\n\nContext from course materials:\n");
+        prompt.push_str("\n\n---\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
             let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
         }
+        prompt.push_str("---");
     }
 
     // Conversation history (last N turns)
@@ -236,12 +239,12 @@ pub fn assemble_prompt_gemma(
             }
         }
         // Current question
-        prompt.push_str("<start_of_turn>user\n");
+        prompt.push_str("<start_of_turn>user\nQuestion: ");
         prompt.push_str(question);
         prompt.push_str("<end_of_turn>\n");
     } else {
         // No history — add question to the system-as-user turn
-        prompt.push_str("\n\n");
+        prompt.push_str("\n\nQuestion: ");
         prompt.push_str(question);
         prompt.push_str("<end_of_turn>\n");
     }
@@ -542,7 +545,7 @@ mod tests {
         assert!(prompt.contains("Tutor."));
         assert!(prompt.contains("Hello"));
         assert!(prompt.contains("<start_of_turn>model\nHi there!<end_of_turn>"));
-        assert!(prompt.contains("<start_of_turn>user\nNext question<end_of_turn>"));
+        assert!(prompt.contains("<start_of_turn>user\nQuestion: Next question<end_of_turn>"));
         assert!(prompt.ends_with("<start_of_turn>model\n"));
         // Gemma has no system role
         assert!(!prompt.contains("<start_of_turn>system"));
