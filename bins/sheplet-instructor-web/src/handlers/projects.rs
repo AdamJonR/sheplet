@@ -39,6 +39,7 @@ struct ProjectStatusInfo {
     model_name: Option<String>,
     finetune_files: Vec<String>,
     build_timestamp: Option<String>,
+    fingerprint: Option<String>,
 }
 
 async fn list_projects(
@@ -113,6 +114,10 @@ fn build_status(path: &std::path::Path, manifest: &ProjectManifest) -> ProjectSt
         false
     };
 
+    let fingerprint = bundle::keys::Keypair::default_keypair_path()
+        .and_then(|p| bundle::keys::Keypair::load_or_create(&p).ok())
+        .map(|kp| kp.fingerprint());
+
     ProjectStatusInfo {
         has_config,
         has_model,
@@ -123,6 +128,7 @@ fn build_status(path: &std::path::Path, manifest: &ProjectManifest) -> ProjectSt
         model_name: manifest.model_name.clone(),
         finetune_files,
         build_timestamp: manifest.build_timestamp.clone(),
+        fingerprint,
     }
 }
 

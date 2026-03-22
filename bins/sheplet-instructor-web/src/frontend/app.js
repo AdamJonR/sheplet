@@ -166,7 +166,9 @@ async function refreshDashboard() {
             { done: s.has_model, label: 'Model downloaded', detail: s.model_name ? s.model_name : 'No model downloaded' },
             { done: s.has_finetune_data, label: 'Fine-tuning data prepared', detail: s.finetune_files.length ? s.finetune_files.join(', ') : 'No JSONL files' },
             { done: s.has_adapter, label: 'Fine-tuning complete', detail: s.has_adapter ? 'adapter.safetensors present' : 'Not fine-tuned yet' },
-            { done: !!s.build_timestamp, label: 'Bundle created', detail: s.build_timestamp ? `Build: ${s.build_timestamp}` : 'No bundle created yet' },
+            { done: !!s.build_timestamp, label: 'Bundle created', detail: s.build_timestamp
+                ? `Build: ${s.build_timestamp}` + (s.fingerprint ? ` | Fingerprint: ${s.fingerprint}` : '')
+                : 'No bundle created yet' },
         ];
 
         items.forEach(item => {
@@ -485,6 +487,12 @@ async function refreshBundleInfo() {
             <div class="info-row"><span class="info-label">Adapter:</span> ${s.has_adapter ? 'Present' : 'Not trained'}</div>
             <div class="info-row"><span class="info-label">Database:</span> ${s.has_database ? 'Populated' : 'Empty'}</div>
             <div class="info-row"><span class="info-label">Last build:</span> ${s.build_timestamp || 'Never'}</div>
+            <div class="info-row fingerprint-row">
+                <span class="info-label">Fingerprint:</span>
+                <code class="fingerprint">${s.fingerprint || 'Not available'}</code>
+                ${s.fingerprint ? `<button class="btn-copy" onclick="navigator.clipboard.writeText('${s.fingerprint}')">Copy</button>` : ''}
+            </div>
+            <div class="info-hint">Students must enter this fingerprint when loading the bundle.</div>
         `;
     } catch (e) {
         console.error('Failed to load bundle info:', e);
