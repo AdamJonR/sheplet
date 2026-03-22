@@ -11,18 +11,16 @@ pub enum Workload {
     Training,
     /// Sentence embedding (22M BERT) — GPU dispatch overhead negates speedup.
     Embedding,
-    /// SafeTensors → GGUF quantization — one-time, integer-heavy.
-    Quantization,
 }
 
 /// Select the appropriate device for the given workload.
 ///
 /// - `Inference` and `Training` are routed to the best available GPU (or CPU fallback).
-/// - `Embedding` and `Quantization` always use CPU.
+/// - `Embedding` always uses CPU.
 pub fn device_for(workload: Workload) -> Device {
     match workload {
         Workload::Inference | Workload::Training => best_gpu_or_cpu(),
-        Workload::Embedding | Workload::Quantization => Device::Cpu,
+        Workload::Embedding => Device::Cpu,
     }
 }
 
@@ -33,12 +31,6 @@ mod tests {
     #[test]
     fn embedding_always_cpu() {
         let device = device_for(Workload::Embedding);
-        assert!(matches!(device, Device::Cpu));
-    }
-
-    #[test]
-    fn quantization_always_cpu() {
-        let device = device_for(Workload::Quantization);
         assert!(matches!(device, Device::Cpu));
     }
 

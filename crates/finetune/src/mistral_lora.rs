@@ -1,10 +1,8 @@
-//! Llama 3.2 model with LoRA injection for fine-tuning.
+//! Mistral model with LoRA injection for fine-tuning.
 //!
-//! Follows phi3_lora.rs pattern but with separate q/k/v/o projections:
-//! - Standard RmsNorm (not Gemma's 1+weight variant)
-//! - 2 norms per layer (not 4)
-//! - No QK-norm, no sliding window, no embedding scaling
-//! - Separate q/k/v/o projections with LoRA (same as Gemma)
+//! Nearly identical to Llama: separate q/k/v/o projections, no bias,
+//! standard RmsNorm, SiLU MLP. Sliding window attention is handled
+//! internally during inference (not in LoRA trainer).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,9 +13,9 @@ use candle_nn::{Embedding, VarBuilder};
 use crate::lora::{LoraConfig, LoraLinear};
 use crate::model_utils::{self, linear_no_bias, repeat_kv, RotaryEmbedding};
 
-/// Llama 3.2 config for LoRA training.
+/// Mistral config for LoRA training.
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaLoraConfig {
+pub struct MistralLoraConfig {
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -33,23 +31,25 @@ pub struct LlamaLoraConfig {
     pub tie_word_embeddings: bool,
     #[serde(default = "default_hidden_act")]
     pub hidden_act: candle_nn::Activation,
+    pub head_dim: Option<usize>,
 }
 
 fn default_rope_theta() -> f64 {
-    500000.0
+    1000000.0
 }
 
 fn default_max_position_embeddings() -> usize {
-    131072
+    32768
 }
 
 fn default_hidden_act() -> candle_nn::Activation {
     candle_nn::Activation::Silu
 }
 
-impl LlamaLoraConfig {
+impl MistralLoraConfig {
     pub fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
     }
 }
 
@@ -70,7 +70,7 @@ struct LoraAttention {
 impl LoraAttention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        cfg: &LlamaLoraConfig,
+        cfg: &MistralLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
@@ -194,7 +194,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &LlamaLoraConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &MistralLoraConfig, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let intermediate_size = cfg.intermediate_size;
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
@@ -227,7 +227,7 @@ struct DecoderLayer {
 impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        cfg: &LlamaLoraConfig,
+        cfg: &MistralLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
@@ -273,8 +273,8 @@ impl DecoderLayer {
     }
 }
 
-/// Llama 3.2 model with LoRA layers for fine-tuning.
-pub struct LlamaLoraModel {
+/// Mistral model with LoRA layers for fine-tuning.
+pub struct MistralLoraModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: candle_nn::RmsNorm,
@@ -283,9 +283,9 @@ pub struct LlamaLoraModel {
     dtype: DType,
 }
 
-impl LlamaLoraModel {
+impl MistralLoraModel {
     pub fn new(
-        cfg: &LlamaLoraConfig,
+        cfg: &MistralLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
@@ -328,12 +328,10 @@ impl LlamaLoraModel {
         })
     }
 
-    /// Forward pass with LoRA enabled (policy model) — last position only.
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         self.forward_inner(input_ids, seqlen_offset, None, true)
     }
 
-    /// Forward pass with LoRA disabled (reference model for DPO) — last position only.
     pub fn forward_reference(
         &mut self,
         input_ids: &Tensor,
@@ -342,12 +340,10 @@ impl LlamaLoraModel {
         self.forward_inner(input_ids, seqlen_offset, None, false)
     }
 
-    /// Forward pass with LoRA enabled, returning logits from `start_pos` onwards.
     pub fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
         self.forward_inner(input_ids, seqlen_offset, Some(start_pos), true)
     }
 
-    /// Forward pass with LoRA disabled, returning logits from `start_pos` onwards.
     pub fn forward_reference_from(
         &mut self,
         input_ids: &Tensor,
@@ -357,7 +353,6 @@ impl LlamaLoraModel {
         self.forward_inner(input_ids, seqlen_offset, Some(start_pos), false)
     }
 
-    /// `logits_from_pos`: `None` = last position only, `Some(pos)` = from position `pos` onwards.
     fn forward_inner(
         &mut self,
         input_ids: &Tensor,
@@ -381,7 +376,6 @@ impl LlamaLoraModel {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset, use_lora)?;
         }
-        // Narrow hidden states before applying norm+lm_head
         let xs = match logits_from_pos {
             Some(pos) => xs.narrow(1, pos, seq_len - pos)?,
             None => xs.narrow(1, seq_len - 1, 1)?,
@@ -396,7 +390,6 @@ impl LlamaLoraModel {
         }
     }
 
-    /// Count the number of trainable LoRA parameters.
     pub fn lora_param_count(&self) -> usize {
         self.layers
             .iter()
@@ -411,7 +404,6 @@ impl LlamaLoraModel {
             .sum()
     }
 
-    /// Save all LoRA adapter weights to a safetensors file.
     pub fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let mut tensors = HashMap::new();
         let scale_val = if let Some(layer) = self.layers.first() {
@@ -448,15 +440,14 @@ impl LlamaLoraModel {
     }
 }
 
-/// High-level trainer wrapping a LlamaLoraModel with tokenizer.
-pub struct LlamaLoraTrainer {
-    pub model: LlamaLoraModel,
+/// High-level trainer wrapping a MistralLoraModel with tokenizer.
+pub struct MistralLoraTrainer {
+    pub model: MistralLoraModel,
     pub tokenizer: tokenizers::Tokenizer,
     pub device: Device,
 }
 
-impl LlamaLoraTrainer {
-    /// Load a pre-trained Llama 3.2 model with LoRA layers initialized.
+impl MistralLoraTrainer {
     pub fn new(
         model_dir: &std::path::Path,
         lora_cfg: &LoraConfig,
@@ -466,12 +457,12 @@ impl LlamaLoraTrainer {
 
         let config_path = model_dir.join("config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
-        let config: LlamaLoraConfig = serde_json::from_str(&config_str)?;
+        let config: MistralLoraConfig = serde_json::from_str(&config_str)?;
 
         let dtype = DType::F32;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&st_files, dtype, device)? };
 
-        let model = LlamaLoraModel::new(&config, lora_cfg, vb, device)?;
+        let model = MistralLoraModel::new(&config, lora_cfg, vb, device)?;
 
         Ok(Self {
             model,
@@ -489,7 +480,7 @@ impl LlamaLoraTrainer {
     }
 }
 
-impl model_utils::LoraTrainable for LlamaLoraTrainer {
+impl model_utils::LoraTrainable for MistralLoraTrainer {
     fn device(&self) -> &Device {
         &self.device
     }
@@ -559,71 +550,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_llama_lora_config_parse() {
+    fn test_mistral_lora_config_parse() {
         let json = r#"{
-            "vocab_size": 128256,
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 28,
-            "num_attention_heads": 24,
-            "num_key_value_heads": 8,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 500000.0,
-            "max_position_embeddings": 131072,
-            "tie_word_embeddings": false,
-            "hidden_act": "silu"
-        }"#;
-        let config: LlamaLoraConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.hidden_size, 3072);
-        assert_eq!(config.num_hidden_layers, 28);
-        assert_eq!(config.head_dim(), 128);
-        assert!(!config.tie_word_embeddings);
-    }
-
-    #[test]
-    fn test_llama_lora_config_parse_1b() {
-        let json = r#"{
-            "vocab_size": 128256,
-            "hidden_size": 2048,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 16,
+            "vocab_size": 32768,
+            "hidden_size": 4096,
+            "intermediate_size": 14336,
+            "num_hidden_layers": 32,
             "num_attention_heads": 32,
             "num_key_value_heads": 8,
             "rms_norm_eps": 1e-05,
-            "rope_theta": 500000.0,
-            "tie_word_embeddings": true
+            "rope_theta": 1000000.0,
+            "max_position_embeddings": 32768,
+            "tie_word_embeddings": false,
+            "hidden_act": "silu",
+            "sliding_window": 4096
         }"#;
-        let config: LlamaLoraConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.hidden_size, 2048);
-        assert_eq!(config.head_dim(), 64);
-        assert!(config.tie_word_embeddings);
-        // Default max_position_embeddings
-        assert_eq!(config.max_position_embeddings, 131072);
-    }
-
-    #[test]
-    fn test_llama_lora_param_count() {
-        // For a model with L layers, LoRA rank R, we expect:
-        // Per layer: 4 projections × 2 tensors (A + B) = 8 tensors
-        // For q_proj (hidden_size→num_heads*head_dim): A=[R, hidden_size], B=[num_heads*head_dim, R]
-        // So params per projection = R*in + out*R
-        let rank = 8usize;
-        let hidden_size = 256usize;
-        let num_heads = 4usize;
-        let num_kv_heads = 2usize;
-        let head_dim = hidden_size / num_heads; // 64
-        let layers = 2usize;
-
-        // q_proj: in=hidden_size, out=num_heads*head_dim → R*256 + 256*R = 2*R*256
-        // k_proj: in=hidden_size, out=num_kv_heads*head_dim → R*256 + 128*R
-        // v_proj: same as k_proj
-        // o_proj: in=num_heads*head_dim, out=hidden_size → R*256 + 256*R
-        let q_params = rank * hidden_size + (num_heads * head_dim) * rank;
-        let k_params = rank * hidden_size + (num_kv_heads * head_dim) * rank;
-        let v_params = k_params;
-        let o_params = rank * (num_heads * head_dim) + hidden_size * rank;
-        let per_layer = q_params + k_params + v_params + o_params;
-        let total = per_layer * layers;
-        assert!(total > 0, "should have nonzero LoRA params: {total}");
+        let config: MistralLoraConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.hidden_size, 4096);
+        assert_eq!(config.num_hidden_layers, 32);
+        assert_eq!(config.head_dim(), 128);
+        assert!(!config.tie_word_embeddings);
     }
 }

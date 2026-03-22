@@ -163,7 +163,7 @@ async function refreshDashboard() {
             { done: true, label: 'Project initialized', detail: data.project.course_name },
             { done: s.has_config, label: 'Configuration set', detail: s.has_config ? 'config.json present' : 'Using defaults' },
             { done: s.has_database, label: 'Documents ingested', detail: s.has_database ? 'Vector database populated' : 'No documents ingested yet' },
-            { done: s.has_model, label: 'Model downloaded', detail: s.model_name ? `${s.model_name} (${s.quantization})` : 'No model downloaded' },
+            { done: s.has_model, label: 'Model downloaded', detail: s.model_name ? s.model_name : 'No model downloaded' },
             { done: s.has_finetune_data, label: 'Fine-tuning data prepared', detail: s.finetune_files.length ? s.finetune_files.join(', ') : 'No JSONL files' },
             { done: s.has_adapter, label: 'Fine-tuning complete', detail: s.has_adapter ? 'adapter.safetensors present' : 'Not fine-tuned yet' },
             { done: !!s.build_timestamp, label: 'Bundle created', detail: s.build_timestamp ? `Build: ${s.build_timestamp}` : 'No bundle created yet' },
@@ -315,11 +315,10 @@ function setupModel() {
     btn.addEventListener('click', async () => {
         if (!activeProjectName) { alert('Select a project first'); return; }
         const name = document.getElementById('model-name').value;
-        const quantization = document.getElementById('model-quant').value;
 
         btn.disabled = true;
         try {
-            const { task_id } = await api('POST', '/api/model/download', { name, quantization });
+            const { task_id } = await api('POST', '/api/model/download', { name });
             subscribeToTask(task_id, document.getElementById('model-progress'), () => {
                 btn.disabled = false;
                 refreshDashboard();
@@ -483,7 +482,6 @@ async function refreshBundleInfo() {
         infoBox.innerHTML = `
             <div class="info-row"><span class="info-label">Version:</span> ${data.project.version}</div>
             <div class="info-row"><span class="info-label">Model:</span> ${s.model_name || 'Not set'}</div>
-            <div class="info-row"><span class="info-label">Quantization:</span> ${s.quantization || 'Not set'}</div>
             <div class="info-row"><span class="info-label">Adapter:</span> ${s.has_adapter ? 'Present' : 'Not trained'}</div>
             <div class="info-row"><span class="info-label">Database:</span> ${s.has_database ? 'Populated' : 'Empty'}</div>
             <div class="info-row"><span class="info-label">Last build:</span> ${s.build_timestamp || 'Never'}</div>

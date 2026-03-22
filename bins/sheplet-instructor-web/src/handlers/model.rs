@@ -7,7 +7,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::app_state::AppState;
-use crate::project::{project_dirs, require_init, ProjectManifest, local_model_source, copy_local_model, is_gemma_model};
+use crate::project::{project_dirs, require_init, ProjectManifest, local_model_source, copy_local_model};
 use crate::response::{err, ErrorResponse};
 use crate::task_manager::TaskEvent;
 
@@ -18,7 +18,6 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 struct ModelRequest {
     name: Option<String>,
-    quantization: Option<String>,
 }
 
 async fn start_model_download(
@@ -35,14 +34,13 @@ async fn start_model_download(
     require_init(&project_path)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
 
-    let name = body.name.unwrap_or_else(|| "phi-4-mini-instruct".to_string());
-    let quantization = body.quantization.unwrap_or_else(|| "q4-k-m".to_string());
+    let name = body.name.unwrap_or_else(|| "phi-3-mini-4k-instruct".to_string());
 
     let (task_id, tx) = state.tasks.create_task("model_download").await;
     let rx = tx.subscribe();
 
     tokio::task::spawn_blocking(move || {
-        let result = run_model_download(&project_path, &name, &quantization, &tx);
+        let result = run_model_download(&project_path, &name, &tx);
         let success = result.is_ok();
         let error = result.err().map(|e| format!("{e:#}"));
         let _ = tx.send(TaskEvent::Done { success, error });
@@ -56,20 +54,10 @@ async fn start_model_download(
 fn run_model_download(
     project_path: &std::path::Path,
     name: &str,
-    quantization: &str,
     tx: &tokio::sync::broadcast::Sender<TaskEvent>,
 ) -> anyhow::Result<()> {
     let mut manifest = ProjectManifest::load(project_path)?;
     let dirs = project_dirs(project_path);
-
-    // Guard: GGUF quantization is not supported for Gemma models
-    if is_gemma_model(name) && quantization != "none" {
-        anyhow::bail!(
-            "GGUF quantization is not supported for Gemma models yet \
-             (the quantizer's tensor name mapper is Phi-specific). \
-             Use quantization \"none\" for Gemma models."
-        );
-    }
 
     let model_dir = &dirs.model;
 
@@ -93,10 +81,15 @@ fn run_model_download(
         });
     } else {
         let repo_id = match name {
-            "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
-            "gemma-3-1b-it" => "google/gemma-3-1b-it",
+            "phi-3-mini-4k-instruct" => "microsoft/Phi-3-mini-4k-instruct",
             "llama-3.2-1b" => "meta-llama/Llama-3.2-1B-Instruct",
             "llama-3.2-3b" => "meta-llama/Llama-3.2-3B-Instruct",
+            "qwen2.5-0.5b" => "Qwen/Qwen2.5-0.5B-Instruct",
+            "qwen2.5-1.5b" => "Qwen/Qwen2.5-1.5B-Instruct",
+            "qwen2.5-3b" => "Qwen/Qwen2.5-3B-Instruct",
+            "gemma-2b" => "google/gemma-2b-it",
+            "gemma-2-2b" => "google/gemma-2-2b-it",
+            "mistral-7b" => "mistralai/Mistral-7B-Instruct-v0.3",
             other => other,
         };
 
@@ -186,49 +179,8 @@ fn run_model_download(
         detail: "Embedding model ready".to_string(),
     });
 
-    // Step 3: Quantize (skip for "none")
-    if quantization != "none" {
-        let _ = tx.send(TaskEvent::StepStarted {
-            step: "Quantizing model".to_string(),
-        });
-        let gguf_path = model_dir.join("model.gguf");
-        let progress_cb = |current: usize, total: usize| {
-            let _ = tx.send(TaskEvent::Progress {
-                step: "Quantizing model".to_string(),
-                current: current as u64,
-                total: total as u64,
-            });
-        };
-        rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, Some(&progress_cb))?;
-        let _ = tx.send(TaskEvent::StepCompleted {
-            step: "Quantizing model".to_string(),
-            detail: format!("Quantized to {quantization}"),
-        });
-
-        // Clean up SafeTensors files
-        for entry in std::fs::read_dir(model_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "safetensors") {
-                std::fs::remove_file(&path)?;
-            }
-            if path
-                .file_name()
-                .is_some_and(|n| n == "model.safetensors.index.json")
-            {
-                std::fs::remove_file(&path)?;
-            }
-        }
-    } else {
-        let _ = tx.send(TaskEvent::StepCompleted {
-            step: "Quantizing model".to_string(),
-            detail: "Skipped (full precision)".to_string(),
-        });
-    }
-
     // Update manifest
     manifest.model_name = Some(name.to_string());
-    manifest.quantization = Some(quantization.to_string());
     manifest.save(&dirs.root)?;
 
     Ok(())

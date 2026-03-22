@@ -1,6 +1,6 @@
 //! Shared utilities for LoRA model implementations.
 //!
-//! Contains helpers used by both Phi3 and Gemma3 LoRA models.
+//! Contains helpers used by both Phi3 and Llama LoRA models.
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::VarBuilder;

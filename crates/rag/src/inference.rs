@@ -3,17 +3,22 @@ use std::sync::mpsc;
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
+use candle_transformers::models::gemma as ct_gemma;
+use candle_transformers::models::llama as ct_llama;
+use candle_transformers::models::mistral as ct_mistral;
+use candle_transformers::models::phi3 as ct_phi3;
+use candle_transformers::models::qwen2 as ct_qwen2;
 use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
-use crate::quantized_phi3;
-use crate::quantized_llama;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
     Phi3,
-    Gemma3,
     Llama,
+    Qwen2,
+    Gemma,
+    Mistral,
 }
 
 /// Parse `eos_token_id` from a model's config.json string.
@@ -46,8 +51,11 @@ fn detect_model_arch_with_config(model_dir: impl AsRef<Path>) -> Result<(ModelAr
     let config_str = std::fs::read_to_string(&config_path)?;
     let config: serde_json::Value = serde_json::from_str(&config_str)?;
     let arch = match config.get("model_type").and_then(|v| v.as_str()) {
-        Some("gemma3_text" | "gemma2") => ModelArch::Gemma3,
         Some("llama") => ModelArch::Llama,
+        Some("qwen2") => ModelArch::Qwen2,
+        Some("gemma") => ModelArch::Gemma,
+        Some("gemma2") => ModelArch::Gemma, // Gemma2 uses same inference path
+        Some("mistral") => ModelArch::Mistral,
         _ => ModelArch::Phi3,
     };
     Ok((arch, config_str))
@@ -70,31 +78,44 @@ pub trait TextGenerator: Send {
 }
 
 enum InferenceModel {
-    PhiFull(crate::phi3::Model),
-    PhiQuantized(quantized_phi3::ModelWeights),
-    Gemma3(crate::gemma3::Gemma3Model),
-    LlamaFull(crate::llama::LlamaModel),
-    LlamaQuantized(quantized_llama::ModelWeights),
+    Phi(ct_phi3::Model),
+    Llama {
+        model: ct_llama::Llama,
+        cache: ct_llama::Cache,
+        config: ct_llama::Config,
+        dtype: DType,
+        device: Device,
+    },
+    Qwen2(ct_qwen2::ModelForCausalLM),
+    Gemma(ct_gemma::Model),
+    Mistral(ct_mistral::Model),
 }
 
 impl InferenceModel {
     fn forward(&mut self, input: &Tensor, index_pos: usize) -> candle_core::Result<Tensor> {
         match self {
-            InferenceModel::PhiFull(m) => m.forward(input, index_pos),
-            InferenceModel::PhiQuantized(m) => m.forward(input, index_pos),
-            InferenceModel::Gemma3(m) => m.forward(input, index_pos),
-            InferenceModel::LlamaFull(m) => m.forward(input, index_pos),
-            InferenceModel::LlamaQuantized(m) => m.forward(input, index_pos),
+            InferenceModel::Phi(m) => m.forward(input, index_pos),
+            InferenceModel::Llama { model, cache, .. } => {
+                model.forward(input, index_pos, cache)
+            }
+            InferenceModel::Qwen2(m) => m.forward(input, index_pos),
+            InferenceModel::Gemma(m) => m.forward(input, index_pos),
+            InferenceModel::Mistral(m) => m.forward(input, index_pos),
         }
     }
 
     fn clear_kv_cache(&mut self) {
         match self {
-            InferenceModel::PhiFull(m) => m.clear_kv_cache(),
-            InferenceModel::PhiQuantized(m) => m.clear_kv_cache(),
-            InferenceModel::Gemma3(m) => m.clear_kv_cache(),
-            InferenceModel::LlamaFull(m) => m.clear_kv_cache(),
-            InferenceModel::LlamaQuantized(m) => m.clear_kv_cache(),
+            InferenceModel::Phi(m) => m.clear_kv_cache(),
+            InferenceModel::Llama { config, dtype, device, cache, .. } => {
+                // Recreate cache to clear KV state (kvs field is private)
+                if let Ok(new_cache) = ct_llama::Cache::new(true, *dtype, config, device) {
+                    *cache = new_cache;
+                }
+            }
+            InferenceModel::Qwen2(m) => m.clear_kv_cache(),
+            InferenceModel::Gemma(m) => m.clear_kv_cache(),
+            InferenceModel::Mistral(m) => m.clear_kv_cache(),
         }
     }
 }
@@ -118,171 +139,193 @@ impl PhiGenerator {
         let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
             ?;
 
-        // Check for GGUF file first (quantized model)
-        let gguf_path = model_dir.join("model.gguf");
-        let model = if gguf_path.exists() {
-            let mut file = std::fs::File::open(&gguf_path)?;
-            let ct = candle_core::quantized::gguf_file::Content::read(&mut file)
-                .map_err(|e| RagError::Other(format!("failed to read GGUF: {e}")))?;
-            // Dispatch based on GGUF architecture metadata
-            let gguf_arch = ct.metadata.get("general.architecture")
-                .and_then(|v| v.to_string().ok())
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            match gguf_arch.as_str() {
-                "llama" => {
-                    let weights = quantized_llama::ModelWeights::from_gguf(ct, &mut file, device)
-                        .map_err(|e| RagError::Other(format!("failed to load quantized Llama model: {e}")))?;
-                    InferenceModel::LlamaQuantized(weights)
-                }
-                _ => {
-                    let weights = quantized_phi3::ModelWeights::from_gguf(ct, &mut file, device)
-                        .map_err(|e| RagError::Other(format!("failed to load quantized model: {e}")))?;
-                    InferenceModel::PhiQuantized(weights)
+        // Load SafeTensors model
+        let mut safetensors_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "safetensors"))
+            .collect();
+        safetensors_files.sort();
+
+        if safetensors_files.is_empty() {
+            return Err(RagError::Other(format!(
+                "No safetensors files found in {}",
+                model_dir.display()
+            )));
+        }
+
+        let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
+        let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
+        let model = match arch {
+            ModelArch::Llama => {
+                let llama_config: ct_llama::LlamaConfig =
+                    serde_json::from_str(&config_str)?;
+
+                eprintln!(
+                    "Llama config: hidden_size={}, layers={}, heads={}, kv_heads={}",
+                    llama_config.hidden_size, llama_config.num_hidden_layers,
+                    llama_config.num_attention_heads,
+                    llama_config.num_key_value_heads.unwrap_or(llama_config.num_attention_heads),
+                );
+
+                let config = llama_config.into_config(false);
+
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
+
+                let cache = ct_llama::Cache::new(true, dtype, &config, device)?;
+                let model = ct_llama::Llama::load(vb, &config)?;
+                InferenceModel::Llama {
+                    model,
+                    cache,
+                    config,
+                    dtype,
+                    device: device.clone(),
                 }
             }
-        } else {
-            // Fall back to SafeTensors path
-            let mut safetensors_files: Vec<std::path::PathBuf> = std::fs::read_dir(model_dir)?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "safetensors"))
-                .collect();
-            safetensors_files.sort();
+            ModelArch::Phi3 => {
+                let config: ct_phi3::Config =
+                    serde_json::from_str(&config_str)?;
 
-            if safetensors_files.is_empty() {
-                return Err(RagError::Other(format!(
-                    "No safetensors or GGUF files found in {}",
-                    model_dir.display()
-                )));
+                eprintln!(
+                    "Phi3 config: hidden_size={}, head_dim={}, layers={}, \
+                     rope_scaling={}",
+                    config.hidden_size, config.head_dim(),
+                    config.num_hidden_layers,
+                    if config.rope_scaling.is_some() { "yes" } else { "none" },
+                );
+
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
+
+                let model = ct_phi3::Model::new(&config, vb)?;
+                InferenceModel::Phi(model)
             }
+            ModelArch::Qwen2 => {
+                let config: ct_qwen2::Config =
+                    serde_json::from_str(&config_str)?;
 
-            let (arch, config_str) = detect_model_arch_with_config(model_dir)?;
-            let dtype = if device.is_cpu() { DType::F32 } else { DType::BF16 };
-            match arch {
-                ModelArch::Gemma3 => {
-                    let config: crate::gemma3::Gemma3Config =
-                        serde_json::from_str(&config_str)?;
+                eprintln!(
+                    "Qwen2 config: hidden_size={}, layers={}, heads={}, kv_heads={}",
+                    config.hidden_size, config.num_hidden_layers,
+                    config.num_attention_heads, config.num_key_value_heads,
+                );
 
-                    let sliding_count = config.layer_types.iter().filter(|t| t.as_str() == "sliding_attention").count();
-                    let global_count = config.num_hidden_layers - sliding_count;
-                    eprintln!(
-                        "Gemma3 config: hidden_size={}, head_dim={}, layers={} ({} sliding + {} global), \
-                         rope_theta={}, rope_local_base_freq={:?}, sliding_window={:?}",
-                        config.hidden_size, config.head_dim, config.num_hidden_layers,
-                        sliding_count, global_count,
-                        config.rope_theta, config.rope_local_base_freq, config.sliding_window,
-                    );
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
 
-                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
-                        merge_lora_adapter(
-                            &safetensors_files,
-                            adapter_path.unwrap(),
-                            device,
-                            dtype,
-                            false,
-                        )?
-                    } else {
-                        unsafe {
-                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                        }
-                    };
+                let model = ct_qwen2::ModelForCausalLM::new(&config, vb)?;
+                InferenceModel::Qwen2(model)
+            }
+            ModelArch::Gemma => {
+                let config: ct_gemma::Config =
+                    serde_json::from_str(&config_str)?;
 
-                    let model = crate::gemma3::Gemma3Model::new(&config, vb)?;
-                    InferenceModel::Gemma3(model)
-                }
-                ModelArch::Llama => {
-                    let config: crate::llama::LlamaConfig =
-                        serde_json::from_str(&config_str)?;
+                eprintln!(
+                    "Gemma config: hidden_size={}, head_dim={}, layers={}, heads={}, kv_heads={}",
+                    config.hidden_size, config.head_dim,
+                    config.num_hidden_layers, config.num_attention_heads,
+                    config.num_key_value_heads,
+                );
 
-                    eprintln!(
-                        "Llama config: hidden_size={}, head_dim={}, layers={}, \
-                         rope_theta={}, tie_word_embeddings={}",
-                        config.hidden_size, config.head_dim(), config.num_hidden_layers,
-                        config.rope_theta, config.tie_word_embeddings,
-                    );
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
 
-                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
-                        merge_lora_adapter(
-                            &safetensors_files,
-                            adapter_path.unwrap(),
-                            device,
-                            dtype,
-                            false,
-                        )?
-                    } else {
-                        unsafe {
-                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                        }
-                    };
+                let model = ct_gemma::Model::new(false, &config, vb)?;
+                InferenceModel::Gemma(model)
+            }
+            ModelArch::Mistral => {
+                let config: ct_mistral::Config =
+                    serde_json::from_str(&config_str)?;
 
-                    let model = crate::llama::LlamaModel::new(&config, vb)?;
-                    InferenceModel::LlamaFull(model)
-                }
-                ModelArch::Phi3 => {
-                    let config: crate::phi3::Config =
-                        serde_json::from_str(&config_str)?;
+                eprintln!(
+                    "Mistral config: hidden_size={}, layers={}, heads={}, kv_heads={}",
+                    config.hidden_size, config.num_hidden_layers,
+                    config.num_attention_heads, config.num_key_value_heads,
+                );
 
-                    eprintln!(
-                        "Phi3 config: hidden_size={}, head_dim={}, rope_dim={}, layers={}, \
-                         partial_rotary_factor={}, rope_scaling={}, tie_word_embeddings={}",
-                        config.hidden_size, config.head_dim(), config.rope_dim(),
-                        config.num_hidden_layers, config.partial_rotary_factor,
-                        if config.rope_scaling.is_some() { "longrope" } else { "none" },
-                        config.tie_word_embeddings,
-                    );
+                let vb = if adapter_path.is_some_and(|p| p.exists()) {
+                    merge_lora_adapter(
+                        &safetensors_files,
+                        adapter_path.unwrap(),
+                        device,
+                        dtype,
+                        false,
+                    )?
+                } else {
+                    unsafe {
+                        VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
+                    }
+                };
 
-                    let vb = if adapter_path.is_some_and(|p| p.exists()) {
-                        merge_lora_adapter(
-                            &safetensors_files,
-                            adapter_path.unwrap(),
-                            device,
-                            dtype,
-                            false,
-                        )?
-                    } else {
-                        unsafe {
-                            VarBuilder::from_mmaped_safetensors(&safetensors_files, dtype, device)?
-                        }
-                    };
-
-                    let model = crate::phi3::Model::new(&config, vb)?;
-                    InferenceModel::PhiFull(model)
-                }
+                let model = ct_mistral::Model::new(&config, vb)?;
+                InferenceModel::Mistral(model)
             }
         };
 
-        // Determine EOS token IDs: prefer config.json, fall back to tokenizer heuristic
-        let eos_token_ids = if gguf_path.exists() {
-            // GGUF models don't have config.json — use tokenizer heuristic
+        // Determine EOS token IDs from config.json, fall back to tokenizer heuristic
+        let config_path = model_dir.join("config.json");
+        let from_config = if let Ok(config_str) = std::fs::read_to_string(&config_path) {
+            parse_eos_token_ids(&config_str)
+        } else {
+            vec![]
+        };
+        let eos_token_ids = if from_config.is_empty() {
             let id = tokenizer
-                .token_to_id("<end_of_turn>")
-                .or_else(|| tokenizer.token_to_id("<|eot_id|>"))
-                .or_else(|| tokenizer.token_to_id("<eos>"))
+                .token_to_id("<|eot_id|>")
                 .or_else(|| tokenizer.token_to_id("<|end|>"))
+                .or_else(|| tokenizer.token_to_id("<|im_end|>"))
+                .or_else(|| tokenizer.token_to_id("<end_of_turn>"))
+                .or_else(|| tokenizer.token_to_id("</s>"))
                 .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
                 .unwrap_or(1);
             vec![id]
         } else {
-            let config_path = model_dir.join("config.json");
-            let from_config = if let Ok(config_str) = std::fs::read_to_string(&config_path) {
-                parse_eos_token_ids(&config_str)
-            } else {
-                vec![]
-            };
-            if from_config.is_empty() {
-                // Fall back to tokenizer heuristic
-                let id = tokenizer
-                    .token_to_id("<end_of_turn>")
-                    .or_else(|| tokenizer.token_to_id("<|eot_id|>"))
-                    .or_else(|| tokenizer.token_to_id("<eos>"))
-                    .or_else(|| tokenizer.token_to_id("<|end|>"))
-                    .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
-                    .unwrap_or(1);
-                vec![id]
-            } else {
-                from_config
-            }
+            from_config
         };
         eprintln!("EOS token IDs: {:?}", eos_token_ids);
 
@@ -534,30 +577,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_model_arch_gemma3_text() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("config.json"),
-            r#"{"model_type": "gemma3_text"}"#,
-        )
-        .unwrap();
-        let arch = detect_model_arch(dir.path()).unwrap();
-        assert_eq!(arch, ModelArch::Gemma3);
-    }
-
-    #[test]
-    fn test_detect_model_arch_gemma2() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("config.json"),
-            r#"{"model_type": "gemma2"}"#,
-        )
-        .unwrap();
-        let arch = detect_model_arch(dir.path()).unwrap();
-        assert_eq!(arch, ModelArch::Gemma3);
-    }
-
-    #[test]
     fn test_detect_model_arch_llama() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -574,11 +593,59 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("config.json"),
-            r#"{"model_type": "mistral"}"#,
+            r#"{"model_type": "unknown_model"}"#,
         )
         .unwrap();
         let arch = detect_model_arch(dir.path()).unwrap();
         assert_eq!(arch, ModelArch::Phi3, "unknown model_type should fall back to Phi3");
+    }
+
+    #[test]
+    fn test_detect_model_arch_qwen2() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "qwen2"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Qwen2);
+    }
+
+    #[test]
+    fn test_detect_model_arch_gemma() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "gemma"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Gemma);
+    }
+
+    #[test]
+    fn test_detect_model_arch_gemma2() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "gemma2"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Gemma, "gemma2 should map to Gemma arch");
+    }
+
+    #[test]
+    fn test_detect_model_arch_mistral() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"model_type": "mistral"}"#,
+        )
+        .unwrap();
+        let arch = detect_model_arch(dir.path()).unwrap();
+        assert_eq!(arch, ModelArch::Mistral);
     }
 
     #[test]
@@ -598,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lora_layer_to_weight_path_gemma3() {
+    fn test_lora_layer_to_weight_path_llama() {
         assert_eq!(
             lora_layer_to_weight_path("layers.0.q_proj"),
             "model.layers.0.self_attn.q_proj.weight"
@@ -886,13 +953,13 @@ mod tests {
 
     #[test]
     fn test_parse_eos_token_ids_single() {
-        let config = r#"{"model_type": "gemma3_text", "eos_token_id": 1}"#;
+        let config = r#"{"model_type": "phi3", "eos_token_id": 1}"#;
         assert_eq!(parse_eos_token_ids(config), vec![1]);
     }
 
     #[test]
     fn test_parse_eos_token_ids_array() {
-        let config = r#"{"model_type": "gemma3_text", "eos_token_id": [1, 106]}"#;
+        let config = r#"{"model_type": "llama", "eos_token_id": [1, 106]}"#;
         assert_eq!(parse_eos_token_ids(config), vec![1, 106]);
     }
 
@@ -919,95 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn test_phi4_mini_config_deserializes() {
-        let config_json = r#"{
-            "vocab_size": 200064,
-            "hidden_act": "silu",
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 24,
-            "num_key_value_heads": 8,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 10000.0,
-            "bos_token_id": 199999,
-            "eos_token_id": 199999,
-            "rope_scaling": {
-                "long_factor": [1.0, 1.1, 1.2],
-                "short_factor": [1.0, 1.1, 1.2],
-                "type": "longrope"
-            },
-            "max_position_embeddings": 131072,
-            "partial_rotary_factor": 0.75
-        }"#;
-        let config: crate::phi3::Config = serde_json::from_str(config_json)
-            .expect("should deserialize phi-4-mini config");
-        assert_eq!(config.vocab_size, 200064);
-        assert_eq!(config.num_hidden_layers, 32);
-        assert!(config.rope_scaling.is_some());
-        assert_eq!(config.rope_scaling.as_ref().unwrap().long_factor.len(), 3);
-        assert_eq!(config.rope_dim(), 96); // 128 * 0.75
-    }
-
-    #[test]
-    fn test_phi3_null_rope_scaling() {
-        let config_json = r#"{
-            "vocab_size": 32064,
-            "hidden_act": "silu",
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 32,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 10000.0,
-            "max_position_embeddings": 4096
-        }"#;
-        let config: crate::phi3::Config = serde_json::from_str(config_json)
-            .expect("should deserialize config without rope_scaling");
-        assert!(config.rope_scaling.is_none());
-        // Default partial_rotary_factor is 1.0, so rope_dim == head_dim
-        assert_eq!(config.rope_dim(), config.head_dim());
-    }
-
-    #[test]
-    fn test_phi4_mini_tie_word_embeddings_deserialized() {
-        let config_json = r#"{
-            "vocab_size": 200064,
-            "hidden_act": "silu",
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 24,
-            "num_key_value_heads": 8,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 10000.0,
-            "tie_word_embeddings": true,
-            "max_position_embeddings": 131072
-        }"#;
-        let config: crate::phi3::Config = serde_json::from_str(config_json).unwrap();
-        assert!(config.tie_word_embeddings);
-    }
-
-    #[test]
-    fn test_phi3_tie_word_embeddings_default_false() {
-        let config_json = r#"{
-            "vocab_size": 32064,
-            "hidden_act": "silu",
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 32,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 10000.0,
-            "max_position_embeddings": 4096
-        }"#;
-        let config: crate::phi3::Config = serde_json::from_str(config_json).unwrap();
-        assert!(!config.tie_word_embeddings);
-    }
-
-    #[test]
     fn test_sample_token_repetition_penalty() {
         let device = Device::Cpu;
         // Token 2 has highest logit, but we penalize it
@@ -1031,8 +1009,6 @@ mod tests {
     }
 }
 
-/// Load safetensors into a HashMap, injecting `lm_head.weight` as an alias for
-/// `model.embed_tokens.weight` when `tie_word_embeddings` is true.
 /// Merge LoRA adapter weights into base model weights.
 ///
 /// Loads all base safetensors into memory, applies LoRA deltas

@@ -59,7 +59,6 @@ async fn active_course(State(state): State<Arc<AppState>>) -> Json<ActiveCourseR
             course_name: active.metadata.manifest.course_name.clone(),
             version: active.metadata.manifest.version.clone(),
             model_name: active.metadata.manifest.model_name.clone(),
-            quantization: active.metadata.manifest.quantization.clone(),
             is_active: true,
         }
     });

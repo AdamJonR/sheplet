@@ -17,21 +17,19 @@ TEST_DIR="$PROJECT_ROOT/test-project"
 INSTRUCTOR="$PROJECT_ROOT/target/release/sheplet-instructor"
 
 usage() {
-    echo "Usage: $0 [--model llama1b|llama3b] [--quantization none|q4-k-m|q5-k-m|q8-0|q4-0] [--lora yes|no]"
+    echo "Usage: $0 [--model llama1b|llama3b] [--lora yes|no]"
     echo ""
-    echo "Defaults: --model llama3b --quantization none --lora no"
+    echo "Defaults: --model llama3b --lora no"
     exit 1
 }
 
 # Defaults
 MODEL="llama3b"
-QUANTIZATION="none"
 LORA="no"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --model)      MODEL="$2"; shift 2 ;;
-        --quantization) QUANTIZATION="$2"; shift 2 ;;
         --lora)       LORA="$2"; shift 2 ;;
         -h|--help)    usage ;;
         *)            echo "Unknown option: $1"; usage ;;
@@ -44,17 +42,12 @@ case "$MODEL" in
   *)        echo "Unknown model: $MODEL"; usage ;;
 esac
 
-case "$QUANTIZATION" in
-  none|q4-k-m|q5-k-m|q8-0|q4-0) ;;
-  *) echo "Unknown quantization: $QUANTIZATION"; usage ;;
-esac
-
 case "$LORA" in
   yes|no) ;;
   *) echo "Invalid --lora value: $LORA (must be yes or no)"; usage ;;
 esac
 
-echo "Model: $MODEL_NAME (quantization: $QUANTIZATION, lora: $LORA)"
+echo "Model: $MODEL_NAME (lora: $LORA)"
 
 TOTAL_START=$SECONDS
 
@@ -357,12 +350,12 @@ STEP_START=$SECONDS
 TIME_INGEST=$(( SECONDS - STEP_START ))
 echo "--- Ingest completed in ${TIME_INGEST}s ---"
 
-# --- Step 6: Model download + quantize ----------------------------------------
+# --- Step 6: Model download ---------------------------------------------------
 
 echo ""
 echo "=== Model ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" model --name "$MODEL_NAME" --quantization "$QUANTIZATION" --project "$TEST_DIR"
+"$INSTRUCTOR" model --name "$MODEL_NAME" --project "$TEST_DIR"
 TIME_MODEL=$(( SECONDS - STEP_START ))
 echo "--- Model completed in ${TIME_MODEL}s ---"
 

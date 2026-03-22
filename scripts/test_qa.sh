@@ -27,12 +27,10 @@ PORT=8421
 CHAT_TIMEOUT=120
 SERVER_WAIT=30
 
-# Test configurations: "label|quantization|do_lora"
+# Test configurations: "label|do_lora"
 CONFIGS=(
-    "Full Precision + LoRA|none|yes"
-    "Full Precision + No LoRA|none|no"
-    "Q4K Quantized + LoRA|q4-k-m|yes"
-    "Q4K Quantized + No LoRA|q4-k-m|no"
+    "SafeTensors + LoRA|yes"
+    "SafeTensors + No LoRA|no"
 )
 
 TOTAL_START=$SECONDS
@@ -194,8 +192,7 @@ DPO_EOF
 
 run_instructor_pipeline() {
     local project_dir="$1"
-    local quantization="$2"
-    local do_lora="$3"
+    local do_lora="$2"
     local bundle_path="$project_dir/bundle.sheplet"
 
     # Init
@@ -219,9 +216,9 @@ run_instructor_pipeline() {
     echo "    ingest: ${time_ingest}s"
 
     # Model
-    echo "  [model] quantization=$quantization"
+    echo "  [model]"
     step_start=$SECONDS
-    "$INSTRUCTOR" model --name "llama-3.2-3b" --quantization "$quantization" --project "$project_dir"
+    "$INSTRUCTOR" model --name "llama-3.2-3b" --project "$project_dir"
     local time_model=$(( SECONDS - step_start ))
     echo "    model: ${time_model}s"
 
@@ -399,12 +396,12 @@ config_num=0
 for config in "${CONFIGS[@]}"; do
     config_num=$(( config_num + 1 ))
 
-    IFS='|' read -r label quantization do_lora <<< "$config"
+    IFS='|' read -r label do_lora <<< "$config"
 
     echo ""
     echo "================================================================"
     echo "  Config $config_num/${#CONFIGS[@]}: $label"
-    echo "  quantization=$quantization  lora=$do_lora"
+    echo "  lora=$do_lora"
     echo "================================================================"
 
     project_dir="$QA_DIR/config-$config_num"
@@ -413,7 +410,7 @@ for config in "${CONFIGS[@]}"; do
     echo ""
     echo "--- Instructor Pipeline ---"
     pipeline_start=$SECONDS
-    if run_instructor_pipeline "$project_dir" "$quantization" "$do_lora"; then
+    if run_instructor_pipeline "$project_dir" "$do_lora"; then
         echo "  Pipeline completed in ${RESULT_PIPELINE_TIME}s"
     else
         echo "  Pipeline FAILED"
@@ -486,7 +483,7 @@ for i in "${!RESULT_LABELS[@]}"; do
     # Show relevant stderr excerpts (filter out noise, keep diagnostics)
     if [ -n "${RESULT_STDERRS[$i]}" ]; then
         # Extract lines with useful diagnostics
-        local_stderr=$(echo "${RESULT_STDERRS[$i]}" | grep -iE "(eos|error|warn|model|lora|adapter|quantiz|loaded|config|logit|token|top-5|WARNING|debug|dtype|device)" || true)
+        local_stderr=$(echo "${RESULT_STDERRS[$i]}" | grep -iE "(eos|error|warn|model|lora|adapter|loaded|config|logit|token|top-5|WARNING|debug|dtype|device)" || true)
         if [ -n "$local_stderr" ]; then
             echo "  Diagnostics:"
             echo "$local_stderr" | head -20 | sed 's/^/    /'

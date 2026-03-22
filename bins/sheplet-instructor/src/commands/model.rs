@@ -2,20 +2,11 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use crate::progress;
-use crate::project::{require_init, project_dirs, local_model_source, copy_local_model, is_gemma_model};
+use crate::project::{require_init, project_dirs, local_model_source, copy_local_model};
 
-pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
+pub fn run(name: &str, project: &Path) -> Result<()> {
     let mut manifest = require_init(project)?;
     let dirs = project_dirs(project);
-
-    // Guard: GGUF quantization is not supported for Gemma models
-    if is_gemma_model(name) && quantization != "none" {
-        bail!(
-            "GGUF quantization is not supported for Gemma models yet \
-             (the quantizer's tensor name mapper is Phi-specific). \
-             Use --quantization none for Gemma models."
-        );
-    }
 
     let model_dir = &dirs.model;
 
@@ -34,10 +25,15 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
         pb.finish_with_message(format!("Model {} copied from local files.", name));
     } else {
         let repo_id = match name {
-            "phi-4-mini-instruct" => "microsoft/Phi-4-mini-instruct",
-            "gemma-3-1b-it" => "google/gemma-3-1b-it",
+            "phi-3-mini-4k-instruct" => "microsoft/Phi-3-mini-4k-instruct",
             "llama-3.2-1b" => "meta-llama/Llama-3.2-1B-Instruct",
             "llama-3.2-3b" => "meta-llama/Llama-3.2-3B-Instruct",
+            "qwen2.5-0.5b" => "Qwen/Qwen2.5-0.5B-Instruct",
+            "qwen2.5-1.5b" => "Qwen/Qwen2.5-1.5B-Instruct",
+            "qwen2.5-3b" => "Qwen/Qwen2.5-3B-Instruct",
+            "gemma-2b" => "google/gemma-2b-it",
+            "gemma-2-2b" => "google/gemma-2-2b-it",
+            "mistral-7b" => "mistralai/Mistral-7B-Instruct-v0.3",
             other => other,
         };
 
@@ -124,7 +120,7 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
         if !has_weights {
             bail!(
                 "No model weight files (.safetensors) were downloaded to {}. \
-                 If this is a gated model (e.g. Gemma), set HF_TOKEN or run \
+                 If this is a gated model, set HF_TOKEN or run \
                  `huggingface-cli login` first.",
                 model_dir.display()
             );
@@ -138,30 +134,12 @@ pub fn run(name: &str, quantization: &str, project: &Path) -> Result<()> {
         .context("failed to download embedding model")?;
     pb.finish_with_message("Embedding model downloaded.");
 
-    if quantization != "none" {
-        // Quantize the model
-        let gguf_path = model_dir.join("model.gguf");
-        let pb = progress::spinner(&format!("Quantizing model to {}...", quantization));
-        rag::quantize_safetensors_to_gguf(model_dir, &gguf_path, quantization, None)
-            .context("failed to quantize model")?;
-        pb.finish_with_message(format!("Model quantized to {}.", quantization));
-
-        // Keep SafeTensors files alongside GGUF — they are needed for LoRA fine-tuning.
-        // GGUF is used for quantized inference; SafeTensors are used for training.
-
-        println!("Model setup complete.");
-        println!("  Model: {}", name);
-        println!("  Quantization: {}", quantization);
-        println!("  GGUF: {}", gguf_path.display());
-    } else {
-        println!("Model setup complete (no quantization).");
-        println!("  Model: {}", name);
-        println!("  Format: SafeTensors (full precision)");
-    }
+    println!("Model setup complete.");
+    println!("  Model: {}", name);
+    println!("  Format: SafeTensors");
 
     // Update manifest
     manifest.model_name = Some(name.to_string());
-    manifest.quantization = Some(quantization.to_string());
     manifest.save(&dirs.root)?;
 
     Ok(())

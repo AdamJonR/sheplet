@@ -172,7 +172,7 @@ pub fn train_sft(
 }
 
 /// SFT training using a full LoRA model with real tokenization and forward passes.
-/// Works with any model implementing the `LoraTrainable` trait (Phi3, Gemma3, etc.).
+/// Works with any model implementing the `LoraTrainable` trait (Phi3, Llama, etc.).
 pub fn train_sft_full(
     trainer: &mut dyn crate::model_utils::LoraTrainable,
     data: &[SftExample],

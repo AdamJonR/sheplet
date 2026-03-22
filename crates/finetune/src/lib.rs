@@ -2,24 +2,28 @@ pub mod checkpoint;
 pub mod data;
 pub mod dpo;
 pub mod error;
-pub mod gemma3_lora;
+pub mod gemma_lora;
 pub mod llama_lora;
 pub mod lora;
+pub mod mistral_lora;
 pub mod model_utils;
 pub mod phi3_lora;
 pub mod preflight;
+pub mod qwen2_lora;
 pub mod sft;
 
 pub use checkpoint::{save_checkpoint, load_checkpoint, CheckpointMeta};
 pub use data::{DpoExample, SftExample, load_dpo_data, load_sft_data};
 pub use dpo::{DpoConfig, train_dpo, train_dpo_full};
 pub use error::FinetuneError;
-pub use gemma3_lora::{Gemma3LoraModel, Gemma3LoraTrainer};
+pub use gemma_lora::{GemmaLoraModel, GemmaLoraTrainer};
 pub use llama_lora::{LlamaLoraModel, LlamaLoraTrainer};
 pub use lora::{LoraConfig, LoraLinear, LoraModel};
+pub use mistral_lora::{MistralLoraModel, MistralLoraTrainer};
 pub use model_utils::LoraTrainable;
 pub use phi3_lora::{Phi3LoraModel, Phi3LoraTrainer};
 pub use preflight::{preflight_check, HardwareInfo, PreflightReport};
+pub use qwen2_lora::{Qwen2LoraModel, Qwen2LoraTrainer};
 pub use sft::{SftConfig, Tokenize, train_sft};
 
 #[cfg(test)]

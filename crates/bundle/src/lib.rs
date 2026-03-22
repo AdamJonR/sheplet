@@ -20,8 +20,7 @@ mod tests {
         Manifest {
             version: "1.0.0".to_string(),
             course_name: "Test Course".to_string(),
-            model_name: "phi-4-mini".to_string(),
-            quantization: "Q4_K_M".to_string(),
+            model_name: "phi-3-mini-4k-instruct".to_string(),
             build_timestamp: "2026-03-07T12:00:00Z".to_string(),
             public_key_hex: hex::encode(keypair.public_key_bytes()),
             public_key_fingerprint: keypair.fingerprint(),
@@ -101,7 +100,7 @@ mod tests {
         let manifest = verify_and_unpack(&bundle_path, &extract_dir, &kp.fingerprint()).unwrap();
 
         assert_eq!(manifest.course_name, "Test Course");
-        assert_eq!(manifest.model_name, "phi-4-mini");
+        assert_eq!(manifest.model_name, "phi-3-mini-4k-instruct");
 
         // Verify files were extracted
         assert!(extract_dir.join("manifest.json").exists());
@@ -186,7 +185,6 @@ mod tests {
         assert_eq!(loaded.version, manifest.version);
         assert_eq!(loaded.course_name, manifest.course_name);
         assert_eq!(loaded.model_name, manifest.model_name);
-        assert_eq!(loaded.quantization, manifest.quantization);
         assert_eq!(loaded.public_key_hex, manifest.public_key_hex);
         assert_eq!(loaded.public_key_fingerprint, manifest.public_key_fingerprint);
     }

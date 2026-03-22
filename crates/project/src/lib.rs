@@ -8,7 +8,6 @@ pub struct ProjectManifest {
     pub version: String,
     pub course_name: String,
     pub model_name: Option<String>,
-    pub quantization: Option<String>,
     pub build_timestamp: Option<String>,
 }
 
@@ -18,7 +17,6 @@ impl ProjectManifest {
             version: "0.1.0".to_string(),
             course_name: course_name.to_string(),
             model_name: None,
-            quantization: None,
             build_timestamp: None,
         }
     }
@@ -135,10 +133,14 @@ pub struct ProjectDirs {
 /// Maps model shortcut names to local directory names under `downloaded-models/`.
 pub fn local_model_source(name: &str) -> Option<&'static str> {
     match name {
-        "gemma270m" => Some("gemma-3-transformers-gemma-3-270m-it-v1"),
-        "gemma1b" => Some("gemma-3-transformers-gemma-3-1b-it-v1"),
         "llama-3.2-1b" | "llama1b" => Some("meta-llama--Llama-3.2-1B-Instruct"),
         "llama-3.2-3b" | "llama3b" => Some("meta-llama--Llama-3.2-3B-Instruct"),
+        "qwen2.5-0.5b" => Some("Qwen--Qwen2.5-0.5B-Instruct"),
+        "qwen2.5-1.5b" => Some("Qwen--Qwen2.5-1.5B-Instruct"),
+        "qwen2.5-3b" => Some("Qwen--Qwen2.5-3B-Instruct"),
+        "gemma-2b" => Some("google--gemma-2b-it"),
+        "gemma-2-2b" => Some("google--gemma-2-2b-it"),
+        "mistral-7b" => Some("mistralai--Mistral-7B-Instruct-v0.3"),
         _ => None,
     }
 }
@@ -209,20 +211,32 @@ pub fn copy_local_model(src_dir: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns true if the model name refers to a Gemma architecture.
-///
-/// Checks known shortcut names and HF repo ID patterns containing "gemma".
-pub fn is_gemma_model(name: &str) -> bool {
-    matches!(name, "gemma270m" | "gemma1b" | "gemma-3-1b-it") || name.contains("/gemma")
-}
-
 /// Returns true if the model name refers to a Llama architecture.
-///
-/// Checks known shortcut names and HF repo ID patterns containing "llama" or "Llama".
 pub fn is_llama_model(name: &str) -> bool {
     matches!(name, "llama-3.2-1b" | "llama1b" | "llama-3.2-3b" | "llama3b")
         || name.contains("/Llama")
         || name.contains("/llama")
+}
+
+/// Returns true if the model name refers to a Qwen2 architecture.
+pub fn is_qwen2_model(name: &str) -> bool {
+    matches!(name, "qwen2.5-0.5b" | "qwen2.5-1.5b" | "qwen2.5-3b")
+        || name.contains("/Qwen2")
+        || name.contains("/qwen2")
+}
+
+/// Returns true if the model name refers to a Gemma architecture.
+pub fn is_gemma_model(name: &str) -> bool {
+    matches!(name, "gemma-2b" | "gemma-2-2b")
+        || name.contains("/gemma")
+        || name.contains("/Gemma")
+}
+
+/// Returns true if the model name refers to a Mistral architecture.
+pub fn is_mistral_model(name: &str) -> bool {
+    matches!(name, "mistral-7b")
+        || name.contains("/Mistral")
+        || name.contains("/mistral")
 }
 
 /// Generate a Unix timestamp (seconds since epoch) as a string.
@@ -243,16 +257,14 @@ mod tests {
         let manifest = ProjectManifest {
             version: "1.2.3".to_string(),
             course_name: "Biology 101".to_string(),
-            model_name: Some("phi-4-mini".to_string()),
-            quantization: Some("Q4_K_M".to_string()),
+            model_name: Some("phi-3-mini-4k-instruct".to_string()),
             build_timestamp: Some("1234567890".to_string()),
         };
         manifest.save(dir.path()).unwrap();
         let loaded = ProjectManifest::load(dir.path()).unwrap();
         assert_eq!(loaded.version, "1.2.3");
         assert_eq!(loaded.course_name, "Biology 101");
-        assert_eq!(loaded.model_name.as_deref(), Some("phi-4-mini"));
-        assert_eq!(loaded.quantization.as_deref(), Some("Q4_K_M"));
+        assert_eq!(loaded.model_name.as_deref(), Some("phi-3-mini-4k-instruct"));
         assert_eq!(loaded.build_timestamp.as_deref(), Some("1234567890"));
     }
 

@@ -242,7 +242,7 @@ fn gather_log_probs(
 }
 
 /// DPO training using a full LoRA model with real tokenization and forward passes.
-/// Works with any model implementing the `LoraTrainable` trait (Phi3, Gemma3, etc.).
+/// Works with any model implementing the `LoraTrainable` trait (Phi3, Llama, etc.).
 ///
 /// Uses `forward` for policy (with LoRA) and `forward_reference` for reference
 /// (frozen weights only) passes, then computes DPO loss from per-token log-probs.

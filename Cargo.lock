@@ -5965,7 +5965,6 @@ name = "rag"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "byteorder",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -5973,7 +5972,6 @@ dependencies = [
  "criterion",
  "db",
  "embeddings",
- "half",
  "lancedb",
  "lru",
  "rand 0.8.5",

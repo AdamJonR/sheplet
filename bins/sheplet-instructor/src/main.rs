@@ -24,10 +24,9 @@ async fn main() -> Result<()> {
         }
         Commands::Model {
             name,
-            quantization,
             project,
         } => {
-            commands::model::run(&name, &quantization, &project)?;
+            commands::model::run(&name, &project)?;
         }
         Commands::Finetune {
             method,

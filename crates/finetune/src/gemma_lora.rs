@@ -1,56 +1,82 @@
-//! Llama 3.2 model with LoRA injection for fine-tuning.
+//! Gemma model with LoRA injection for fine-tuning.
 //!
-//! Follows phi3_lora.rs pattern but with separate q/k/v/o projections:
-//! - Standard RmsNorm (not Gemma's 1+weight variant)
-//! - 2 norms per layer (not 4)
-//! - No QK-norm, no sliding window, no embedding scaling
-//! - Separate q/k/v/o projections with LoRA (same as Gemma)
+//! Key differences from Llama:
+//! - Custom GemmaRmsNorm: uses `(1 + weight) * x_normed` instead of `weight * x_normed`
+//! - Embedding scaling: hidden states multiplied by sqrt(hidden_size)
+//! - Separate q/k/v/o projections, bias controlled by config
+//! - Tied word embeddings (always)
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Embedding, VarBuilder};
 
 use crate::lora::{LoraConfig, LoraLinear};
 use crate::model_utils::{self, linear_no_bias, repeat_kv, RotaryEmbedding};
 
-/// Llama 3.2 config for LoRA training.
+/// Gemma's custom RmsNorm: `(1 + weight) * x_normed` (not `weight * x_normed`).
+#[derive(Debug, Clone)]
+struct GemmaRmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl GemmaRmsNorm {
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl Module for GemmaRmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = x.dim(D::Minus1)?;
+        let x = x.to_dtype(internal_dtype)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        x_normed
+            .to_dtype(x_dtype)?
+            .broadcast_mul(&(&self.weight + 1.0)?)
+    }
+}
+
+/// Gemma config for LoRA training.
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaLoraConfig {
+pub struct GemmaLoraConfig {
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
+    pub head_dim: usize,
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f64,
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
     #[serde(default)]
-    pub tie_word_embeddings: bool,
+    pub attention_bias: bool,
     #[serde(default = "default_hidden_act")]
     pub hidden_act: candle_nn::Activation,
 }
 
 fn default_rope_theta() -> f64 {
-    500000.0
+    10000.0
 }
 
 fn default_max_position_embeddings() -> usize {
-    131072
+    4096
 }
 
 fn default_hidden_act() -> candle_nn::Activation {
-    candle_nn::Activation::Silu
-}
-
-impl LlamaLoraConfig {
-    pub fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
-    }
+    candle_nn::Activation::Gelu
 }
 
 /// Attention block with separate LoRA on q, k, v, o projections.
@@ -67,35 +93,50 @@ struct LoraAttention {
     kv_cache: Option<(Tensor, Tensor)>,
 }
 
+fn load_linear(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: VarBuilder,
+) -> Result<candle_nn::Linear> {
+    let weight = vb.get((out_dim, in_dim), "weight")?;
+    let bias_tensor = if bias {
+        Some(vb.get(out_dim, "bias")?)
+    } else {
+        None
+    };
+    Ok(candle_nn::Linear::new(weight, bias_tensor))
+}
+
 impl LoraAttention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        cfg: &LlamaLoraConfig,
+        cfg: &GemmaLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let head_dim = cfg.head_dim();
+        let head_dim = cfg.head_dim;
         let hidden_size = cfg.hidden_size;
 
-        let q_frozen = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
+        let q_frozen = load_linear(hidden_size, num_heads * head_dim, cfg.attention_bias, vb.pp("q_proj"))?;
         let q_proj =
             LoraLinear::new(q_frozen, hidden_size, num_heads * head_dim, lora_cfg, device)
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        let k_frozen = linear_no_bias(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let k_frozen = load_linear(hidden_size, num_kv_heads * head_dim, cfg.attention_bias, vb.pp("k_proj"))?;
         let k_proj =
             LoraLinear::new(k_frozen, hidden_size, num_kv_heads * head_dim, lora_cfg, device)
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        let v_frozen = linear_no_bias(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let v_frozen = load_linear(hidden_size, num_kv_heads * head_dim, cfg.attention_bias, vb.pp("v_proj"))?;
         let v_proj =
             LoraLinear::new(v_frozen, hidden_size, num_kv_heads * head_dim, lora_cfg, device)
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        let o_frozen = linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
+        let o_frozen = load_linear(num_heads * head_dim, hidden_size, cfg.attention_bias, vb.pp("o_proj"))?;
         let o_proj =
             LoraLinear::new(o_frozen, num_heads * head_dim, hidden_size, lora_cfg, device)
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
@@ -194,7 +235,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &LlamaLoraConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &GemmaLoraConfig, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let intermediate_size = cfg.intermediate_size;
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
@@ -220,14 +261,14 @@ impl Module for Mlp {
 struct DecoderLayer {
     self_attn: LoraAttention,
     mlp: Mlp,
-    input_layernorm: candle_nn::RmsNorm,
-    post_attention_layernorm: candle_nn::RmsNorm,
+    input_layernorm: GemmaRmsNorm,
+    post_attention_layernorm: GemmaRmsNorm,
 }
 
 impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        cfg: &LlamaLoraConfig,
+        cfg: &GemmaLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
@@ -235,8 +276,8 @@ impl DecoderLayer {
         let self_attn =
             LoraAttention::new(rotary_emb, cfg, lora_cfg, vb.pp("self_attn"), device)?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm = candle_nn::rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = candle_nn::rms_norm(
+        let input_layernorm = GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -273,19 +314,20 @@ impl DecoderLayer {
     }
 }
 
-/// Llama 3.2 model with LoRA layers for fine-tuning.
-pub struct LlamaLoraModel {
+/// Gemma model with LoRA layers for fine-tuning.
+pub struct GemmaLoraModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
-    norm: candle_nn::RmsNorm,
+    norm: GemmaRmsNorm,
     lm_head: candle_nn::Linear,
+    hidden_size: usize,
     device: Device,
     dtype: DType,
 }
 
-impl LlamaLoraModel {
+impl GemmaLoraModel {
     pub fn new(
-        cfg: &LlamaLoraConfig,
+        cfg: &GemmaLoraConfig,
         lora_cfg: &LoraConfig,
         vb: VarBuilder,
         device: &Device,
@@ -294,7 +336,7 @@ impl LlamaLoraModel {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
 
-        let head_dim = cfg.head_dim();
+        let head_dim = cfg.head_dim;
         let rotary_emb = Arc::new(RotaryEmbedding::new(
             vb.dtype(),
             head_dim,
@@ -310,30 +352,26 @@ impl LlamaLoraModel {
                 DecoderLayer::new(rotary_emb.clone(), cfg, lora_cfg, vb_l.pp(layer_idx), device)?;
             layers.push(layer);
         }
-        let norm = candle_nn::rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = GemmaRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
 
-        let lm_head = if cfg.tie_word_embeddings {
-            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
-        } else {
-            linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
-        };
+        // Gemma always uses tied word embeddings
+        let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
 
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
+            hidden_size: cfg.hidden_size,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
     }
 
-    /// Forward pass with LoRA enabled (policy model) — last position only.
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         self.forward_inner(input_ids, seqlen_offset, None, true)
     }
 
-    /// Forward pass with LoRA disabled (reference model for DPO) — last position only.
     pub fn forward_reference(
         &mut self,
         input_ids: &Tensor,
@@ -342,12 +380,10 @@ impl LlamaLoraModel {
         self.forward_inner(input_ids, seqlen_offset, None, false)
     }
 
-    /// Forward pass with LoRA enabled, returning logits from `start_pos` onwards.
     pub fn forward_from(&mut self, input_ids: &Tensor, seqlen_offset: usize, start_pos: usize) -> Result<Tensor> {
         self.forward_inner(input_ids, seqlen_offset, Some(start_pos), true)
     }
 
-    /// Forward pass with LoRA disabled, returning logits from `start_pos` onwards.
     pub fn forward_reference_from(
         &mut self,
         input_ids: &Tensor,
@@ -357,7 +393,6 @@ impl LlamaLoraModel {
         self.forward_inner(input_ids, seqlen_offset, Some(start_pos), false)
     }
 
-    /// `logits_from_pos`: `None` = last position only, `Some(pos)` = from position `pos` onwards.
     fn forward_inner(
         &mut self,
         input_ids: &Tensor,
@@ -377,11 +412,13 @@ impl LlamaLoraModel {
                 self.dtype,
             )?)
         };
+        // Gemma scales embeddings by sqrt(hidden_size)
         let mut xs = self.embed_tokens.forward(input_ids)?;
+        xs = (xs * (self.hidden_size as f64).sqrt())?;
+
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset, use_lora)?;
         }
-        // Narrow hidden states before applying norm+lm_head
         let xs = match logits_from_pos {
             Some(pos) => xs.narrow(1, pos, seq_len - pos)?,
             None => xs.narrow(1, seq_len - 1, 1)?,
@@ -396,7 +433,6 @@ impl LlamaLoraModel {
         }
     }
 
-    /// Count the number of trainable LoRA parameters.
     pub fn lora_param_count(&self) -> usize {
         self.layers
             .iter()
@@ -411,7 +447,6 @@ impl LlamaLoraModel {
             .sum()
     }
 
-    /// Save all LoRA adapter weights to a safetensors file.
     pub fn save_adapter(&self, path: &std::path::Path) -> anyhow::Result<()> {
         let mut tensors = HashMap::new();
         let scale_val = if let Some(layer) = self.layers.first() {
@@ -448,15 +483,14 @@ impl LlamaLoraModel {
     }
 }
 
-/// High-level trainer wrapping a LlamaLoraModel with tokenizer.
-pub struct LlamaLoraTrainer {
-    pub model: LlamaLoraModel,
+/// High-level trainer wrapping a GemmaLoraModel with tokenizer.
+pub struct GemmaLoraTrainer {
+    pub model: GemmaLoraModel,
     pub tokenizer: tokenizers::Tokenizer,
     pub device: Device,
 }
 
-impl LlamaLoraTrainer {
-    /// Load a pre-trained Llama 3.2 model with LoRA layers initialized.
+impl GemmaLoraTrainer {
     pub fn new(
         model_dir: &std::path::Path,
         lora_cfg: &LoraConfig,
@@ -466,12 +500,12 @@ impl LlamaLoraTrainer {
 
         let config_path = model_dir.join("config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
-        let config: LlamaLoraConfig = serde_json::from_str(&config_str)?;
+        let config: GemmaLoraConfig = serde_json::from_str(&config_str)?;
 
         let dtype = DType::F32;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&st_files, dtype, device)? };
 
-        let model = LlamaLoraModel::new(&config, lora_cfg, vb, device)?;
+        let model = GemmaLoraModel::new(&config, lora_cfg, vb, device)?;
 
         Ok(Self {
             model,
@@ -489,7 +523,7 @@ impl LlamaLoraTrainer {
     }
 }
 
-impl model_utils::LoraTrainable for LlamaLoraTrainer {
+impl model_utils::LoraTrainable for GemmaLoraTrainer {
     fn device(&self) -> &Device {
         &self.device
     }
@@ -559,71 +593,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_llama_lora_config_parse() {
+    fn test_gemma_lora_config_parse() {
         let json = r#"{
-            "vocab_size": 128256,
-            "hidden_size": 3072,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 28,
-            "num_attention_heads": 24,
-            "num_key_value_heads": 8,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 500000.0,
-            "max_position_embeddings": 131072,
-            "tie_word_embeddings": false,
-            "hidden_act": "silu"
-        }"#;
-        let config: LlamaLoraConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.hidden_size, 3072);
-        assert_eq!(config.num_hidden_layers, 28);
-        assert_eq!(config.head_dim(), 128);
-        assert!(!config.tie_word_embeddings);
-    }
-
-    #[test]
-    fn test_llama_lora_config_parse_1b() {
-        let json = r#"{
-            "vocab_size": 128256,
+            "vocab_size": 256000,
             "hidden_size": 2048,
-            "intermediate_size": 8192,
-            "num_hidden_layers": 16,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 8,
-            "rms_norm_eps": 1e-05,
-            "rope_theta": 500000.0,
-            "tie_word_embeddings": true
+            "intermediate_size": 16384,
+            "num_hidden_layers": 18,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 1,
+            "head_dim": 256,
+            "rms_norm_eps": 1e-06,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 8192,
+            "attention_bias": false
         }"#;
-        let config: LlamaLoraConfig = serde_json::from_str(json).unwrap();
+        let config: GemmaLoraConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.hidden_size, 2048);
-        assert_eq!(config.head_dim(), 64);
-        assert!(config.tie_word_embeddings);
-        // Default max_position_embeddings
-        assert_eq!(config.max_position_embeddings, 131072);
+        assert_eq!(config.num_hidden_layers, 18);
+        assert_eq!(config.head_dim, 256);
+        assert!(!config.attention_bias);
     }
 
     #[test]
-    fn test_llama_lora_param_count() {
-        // For a model with L layers, LoRA rank R, we expect:
-        // Per layer: 4 projections × 2 tensors (A + B) = 8 tensors
-        // For q_proj (hidden_size→num_heads*head_dim): A=[R, hidden_size], B=[num_heads*head_dim, R]
-        // So params per projection = R*in + out*R
-        let rank = 8usize;
-        let hidden_size = 256usize;
-        let num_heads = 4usize;
-        let num_kv_heads = 2usize;
-        let head_dim = hidden_size / num_heads; // 64
-        let layers = 2usize;
-
-        // q_proj: in=hidden_size, out=num_heads*head_dim → R*256 + 256*R = 2*R*256
-        // k_proj: in=hidden_size, out=num_kv_heads*head_dim → R*256 + 128*R
-        // v_proj: same as k_proj
-        // o_proj: in=num_heads*head_dim, out=hidden_size → R*256 + 256*R
-        let q_params = rank * hidden_size + (num_heads * head_dim) * rank;
-        let k_params = rank * hidden_size + (num_kv_heads * head_dim) * rank;
-        let v_params = k_params;
-        let o_params = rank * (num_heads * head_dim) + hidden_size * rank;
-        let per_layer = q_params + k_params + v_params + o_params;
-        let total = per_layer * layers;
-        assert!(total > 0, "should have nonzero LoRA params: {total}");
+    fn test_gemma_rms_norm_uses_one_plus_weight() {
+        let device = Device::Cpu;
+        // weight = zeros → (1 + 0) * x_normed = x_normed
+        let weight = Tensor::zeros(&[4], DType::F32, &device).unwrap();
+        let norm = GemmaRmsNorm {
+            weight,
+            eps: 1e-6,
+        };
+        let input = Tensor::ones(&[1, 4], DType::F32, &device).unwrap();
+        let out = norm.forward(&input).unwrap();
+        // For all-ones input of dim 4: rms = 1.0, so x_normed = ones, output = ones * (1+0) = ones
+        let values = out.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        for v in &values {
+            assert!((v - 1.0).abs() < 1e-4, "expected ~1.0, got {v}");
+        }
     }
 }

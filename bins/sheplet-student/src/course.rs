@@ -32,7 +32,6 @@ pub struct CourseInfo {
     pub course_name: String,
     pub version: String,
     pub model_name: String,
-    pub quantization: String,
     pub is_active: bool,
 }
 
@@ -160,7 +159,6 @@ impl CourseManager {
                 course_name: meta.manifest.course_name.clone(),
                 version: meta.manifest.version.clone(),
                 model_name: meta.manifest.model_name.clone(),
-                quantization: meta.manifest.quantization.clone(),
                 is_active: self.active_id.as_deref() == Some(id),
             })
             .collect();
@@ -173,7 +171,6 @@ impl CourseManager {
                     course_name: active.metadata.manifest.course_name.clone(),
                     version: active.metadata.manifest.version.clone(),
                     model_name: active.metadata.manifest.model_name.clone(),
-                    quantization: active.metadata.manifest.quantization.clone(),
                     is_active: true,
                 });
             }

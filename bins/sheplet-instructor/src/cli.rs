@@ -39,14 +39,12 @@ pub enum Commands {
         project: PathBuf,
     },
 
-    /// Download and quantize a model
+    /// Download a model for local inference
     Model {
-        /// Model name (phi-4-mini-instruct, gemma270m, gemma1b, or HF repo ID)
-        #[arg(long, default_value = "phi-4-mini-instruct")]
+        /// Model name (phi-3-mini-4k-instruct, llama-3.2-1b, llama-3.2-3b, qwen2.5-0.5b,
+        /// qwen2.5-1.5b, qwen2.5-3b, gemma-2b, gemma-2-2b, mistral-7b, or HF repo ID)
+        #[arg(long, default_value = "phi-3-mini-4k-instruct")]
         name: String,
-        /// Quantization level
-        #[arg(long, default_value = "q4-k-m")]
-        quantization: String,
         /// Path to the project directory
         #[arg(long)]
         project: PathBuf,

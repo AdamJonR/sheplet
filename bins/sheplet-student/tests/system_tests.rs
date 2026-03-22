@@ -23,9 +23,9 @@ use test_data::*;
 /// then loads the bundle in the student app and runs a chat query.
 #[tokio::test]
 #[ignore]
-async fn test_full_pipeline_gemma270m() {
-    if !gemma270m_available() {
-        eprintln!("SKIP: gemma270m model not found in downloaded-models/");
+async fn test_full_pipeline_test_model() {
+    if !test_model_available() {
+        eprintln!("SKIP: test_model model not found in downloaded-models/");
         return;
     }
 
@@ -43,6 +43,7 @@ async fn test_full_pipeline_gemma270m() {
         courses: RwLock::new(CourseManager::new()),
         conversations,
         base_dir: student_dir,
+        no_adapter: false,
     });
 
     let app = server::build_router(state.clone());
@@ -136,9 +137,9 @@ async fn test_full_pipeline_gemma270m() {
 /// LoRA merge correctness.
 #[tokio::test]
 #[ignore]
-async fn test_gemma270m_base_inference() {
-    if !gemma270m_available() {
-        eprintln!("SKIP: gemma270m model not found in downloaded-models/");
+async fn test_test_model_base_inference() {
+    if !test_model_available() {
+        eprintln!("SKIP: test_model model not found in downloaded-models/");
         return;
     }
 
@@ -175,9 +176,9 @@ async fn test_gemma270m_base_inference() {
 /// Loads the model directly and times token generation.
 #[tokio::test]
 #[ignore]
-async fn test_gemma270m_generation_performance() {
-    if !gemma270m_available() {
-        eprintln!("SKIP: gemma270m model not found in downloaded-models/");
+async fn test_test_model_generation_performance() {
+    if !test_model_available() {
+        eprintln!("SKIP: test_model model not found in downloaded-models/");
         return;
     }
 
@@ -231,8 +232,8 @@ async fn test_gemma270m_generation_performance() {
 #[tokio::test]
 #[ignore]
 async fn test_instructor_pipeline_only() {
-    if !gemma270m_available() {
-        eprintln!("SKIP: gemma270m model not found in downloaded-models/");
+    if !test_model_available() {
+        eprintln!("SKIP: test_model model not found in downloaded-models/");
         return;
     }
 

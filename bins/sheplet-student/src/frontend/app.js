@@ -60,7 +60,7 @@ async function refreshCourses() {
         courses.forEach(c => {
             const li = document.createElement('li');
             li.textContent = c.course_name;
-            li.title = `${c.model_name} (${c.quantization}) v${c.version}`;
+            li.title = `${c.model_name} v${c.version}`;
             if (c.is_active) {
                 li.classList.add('active');
                 activeCourseId = c.id;

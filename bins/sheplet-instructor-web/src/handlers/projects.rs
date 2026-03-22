@@ -37,7 +37,6 @@ struct ProjectStatusInfo {
     has_adapter: bool,
     has_finetune_data: bool,
     model_name: Option<String>,
-    quantization: Option<String>,
     finetune_files: Vec<String>,
     build_timestamp: Option<String>,
 }
@@ -80,7 +79,14 @@ async fn list_projects(
 
 fn build_status(path: &std::path::Path, manifest: &ProjectManifest) -> ProjectStatusInfo {
     let dirs = project::project_dirs(path);
-    let has_model = dirs.model.join("model.gguf").exists();
+    let has_model = dirs.model.join("config.json").exists()
+        && std::fs::read_dir(&dirs.model)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| e.path().extension().is_some_and(|ext| ext == "safetensors"))
+            })
+            .unwrap_or(false);
     let has_database = dirs.database.exists()
         && std::fs::read_dir(&dirs.database)
             .map(|mut d| d.next().is_some())
@@ -115,7 +121,6 @@ fn build_status(path: &std::path::Path, manifest: &ProjectManifest) -> ProjectSt
         has_adapter,
         has_finetune_data,
         model_name: manifest.model_name.clone(),
-        quantization: manifest.quantization.clone(),
         finetune_files,
         build_timestamp: manifest.build_timestamp.clone(),
     }

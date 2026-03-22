@@ -79,26 +79,22 @@
                 <div id="view-model" class="view">
                     <div class="view-content">
                         <h2 class="view-title">Model Setup</h2>
-                        <p class="view-desc">Download a language model from Hugging Face and quantize it for efficient local inference.</p>
+                        <p class="view-desc">Download a language model from Hugging Face for local inference.</p>
                         <div class="form-group">
                             <label for="model-name">Model</label>
                             <select id="model-name">
-                                <option value="phi-4-mini-instruct" selected>Phi-4 Mini Instruct (3.8B, recommended)</option>
-                                <option value="gemma270m">Gemma 3 270M IT (local, ~300MB)</option>
-                                <option value="gemma1b">Gemma 3 1B IT (local, ~2GB)</option>
+                                <option value="phi-3-mini-4k-instruct" selected>Phi-3 Mini 4K Instruct (3.8B, recommended)</option>
+                                <option value="llama-3.2-1b">Llama 3.2 1B Instruct (local, ~2.5GB)</option>
+                                <option value="llama-3.2-3b">Llama 3.2 3B Instruct (~6GB)</option>
+                                <option value="qwen2.5-0.5b">Qwen2.5 0.5B Instruct (~1GB, ultra-light)</option>
+                                <option value="qwen2.5-1.5b">Qwen2.5 1.5B Instruct (~3GB)</option>
+                                <option value="qwen2.5-3b">Qwen2.5 3B Instruct (~6GB)</option>
+                                <option value="gemma-2b">Gemma 2B IT (~5GB)</option>
+                                <option value="gemma-2-2b">Gemma 2 2B IT (~5GB)</option>
+                                <option value="mistral-7b">Mistral 7B Instruct v0.3 (~14GB, 16GB+ RAM)</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label for="model-quant">Quantization</label>
-                            <select id="model-quant">
-                                <option value="q4-k-m" selected>Q4_K_M (best balance, ~2.5GB)</option>
-                                <option value="q4-k-s">Q4_K_S (smaller, lower quality)</option>
-                                <option value="q5-k-m">Q5_K_M (higher quality, ~3GB)</option>
-                                <option value="q8-0">Q8_0 (highest quality, ~4GB)</option>
-                                <option value="none">None (full precision)</option>
-                            </select>
-                        </div>
-                        <button id="model-btn" class="btn btn-primary" style="width:auto">Download &amp; Quantize</button>
+                        <button id="model-btn" class="btn btn-primary" style="width:auto">Download Model</button>
                         <div id="model-progress" class="progress-display" style="display:none"></div>
                     </div>
                 </div>
@@ -182,7 +178,7 @@
                 <div id="view-bundle" class="view">
                     <div class="view-content">
                         <h2 class="view-title">Bundle &amp; Distribute</h2>
-                        <p class="view-desc">Package your project into a signed .sheplet bundle that students can load. The bundle contains the quantized model, LoRA adapter, embeddings, vector database, and configuration.</p>
+                        <p class="view-desc">Package your project into a signed .sheplet bundle that students can load. The bundle contains the model, LoRA adapter, embeddings, vector database, and configuration.</p>
                         <div id="bundle-info" class="info-box"></div>
                         <div class="form-group">
                             <label for="bundle-output">Output file path</label>

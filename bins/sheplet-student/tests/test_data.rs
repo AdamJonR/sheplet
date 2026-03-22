@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::process::Output;
 
-pub const MODEL_CLI_NAME: &str = "gemma270m";
-pub const MODEL_DIR_NAME: &str = "gemma-3-transformers-gemma-3-270m-it-v1";
+pub const MODEL_CLI_NAME: &str = "llama-3.2-1b";
+pub const MODEL_DIR_NAME: &str = "meta-llama--Llama-3.2-1B-Instruct";
 
 pub const CELL_BIOLOGY_TEXT: &str = r#"Introduction to Cell Biology
 
@@ -140,8 +140,8 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Check if the gemma270m model is available in downloaded-models/.
-pub fn gemma270m_available() -> bool {
+/// Check if the test model is available in downloaded-models/.
+pub fn test_model_available() -> bool {
     let model_dir = workspace_root()
         .join("downloaded-models")
         .join(MODEL_DIR_NAME);
@@ -204,7 +204,7 @@ pub fn run_instructor_pipeline(course_name: &str, bundle_name: &str) -> Pipeline
     let start = std::time::Instant::now();
     instructor_cmd()
         .current_dir(&ws_root)
-        .args(["model", "--name", MODEL_CLI_NAME, "--quantization", "none", "--project"])
+        .args(["model", "--name", MODEL_CLI_NAME, "--project"])
         .arg(&project_dir)
         .assert()
         .success();

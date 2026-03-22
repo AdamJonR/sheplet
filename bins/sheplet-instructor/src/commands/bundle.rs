@@ -31,7 +31,6 @@ pub fn run(project: &Path, output: &Path, bump_version: bool) -> Result<()> {
         version: manifest.version.clone(),
         course_name: manifest.course_name.clone(),
         model_name: manifest.model_name.clone().unwrap_or_default(),
-        quantization: manifest.quantization.clone().unwrap_or_default(),
         build_timestamp: manifest.build_timestamp.clone().unwrap_or_default(),
         public_key_hex: pub_key_hex,
         public_key_fingerprint: fingerprint.clone(),

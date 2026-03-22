@@ -49,16 +49,17 @@ crates/
 ## Key Technical Decisions
 
 - **Pure Rust, no Python**: ML inference uses `candle-core`/`candle-transformers`/`candle-nn` (not PyTorch/LibTorch)
-- **Default model**: Phi-4-mini-instruct (3.8B params), quantized to Q4_K_M
+- **Default model**: Phi-3-mini-4k-instruct (3.8B params), full-precision SafeTensors
 - **Embedding model**: all-MiniLM-L6-v2, bundled inside `.sheplet` files (~90MB)
 - **Vector DB**: LanceDB (embedded, no server process)
-- **Bundle format**: `.sheplet` — zstd-compressed archive containing quantized model, LoRA adapter, embeddings, LanceDB, and config, signed with Ed25519
+- **Supported models**: Phi-3 (via candle-transformers::models::phi3) and Llama 3.2 (via candle-transformers::models::llama)
+- **Bundle format**: `.sheplet` — zstd-compressed archive containing model weights, LoRA adapter, embeddings, LanceDB, and config, signed with Ed25519
 - **Rust edition 2024** across the workspace
 - **Dependencies managed at workspace level** in root `Cargo.toml` — individual crates use `dependency.workspace = true`
 
 ## Data Flow
 
-1. **Instructor**: Documents → `parser` (chunk) → `embeddings` (embed) → `db` (store in LanceDB) → `finetune` (LoRA on Phi-4-mini) → `bundle` (compress + sign → `.sheplet`)
+1. **Instructor**: Documents → `parser` (chunk) → `embeddings` (embed) → `db` (store in LanceDB) → `finetune` (LoRA) → `bundle` (compress + sign → `.sheplet`)
 2. **Student**: `.sheplet` → `bundle` (verify + extract) → query → `embeddings` (embed query) → `db` (retrieve chunks) → `rag` (assemble prompt) → Candle inference → response
 
 ## Important Patterns

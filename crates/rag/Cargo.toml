@@ -23,8 +23,6 @@ rand.workspace = true
 lru.workspace = true
 tracing.workspace = true
 safetensors.workspace = true
-half.workspace = true
-byteorder.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

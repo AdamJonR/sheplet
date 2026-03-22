@@ -113,5 +113,3 @@ tracing = "0.1"
 
 # Serialization (tensor)
 safetensors = "0.4"
-half = "2"
-byteorder = "1"
