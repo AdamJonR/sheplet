@@ -13,6 +13,10 @@ use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
 
+/// Minimum tokens to generate before allowing EOS.
+/// Prevents models with high EOS logits (e.g. Qwen2.5-1.5B) from stopping after 1-2 tokens.
+const MIN_GENERATION_TOKENS: usize = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
     Phi3,
@@ -552,8 +556,12 @@ impl PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            // Mask non-EOS special tokens on ALL generated tokens
-            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
+            // Mask all special tokens during minimum generation window, then only non-EOS
+            let logits = if generated.len() < MIN_GENERATION_TOKENS {
+                mask_token_ids(&logits, &self.special_token_ids)?
+            } else {
+                mask_token_ids(&logits, &self.non_eos_special_ids)?
+            };
             let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
@@ -644,8 +652,12 @@ impl TextGenerator for PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            // Mask non-EOS special tokens on ALL generated tokens
-            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
+            // Mask all special tokens during minimum generation window, then only non-EOS
+            let logits = if all_generated.len() < MIN_GENERATION_TOKENS {
+                mask_token_ids(&logits, &self.special_token_ids)?
+            } else {
+                mask_token_ids(&logits, &self.non_eos_special_ids)?
+            };
             let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &all_generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
