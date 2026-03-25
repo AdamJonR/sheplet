@@ -160,15 +160,15 @@ async function refreshDashboard() {
         checklist.innerHTML = '';
 
         const items = [
-            { done: true, label: 'Project initialized', detail: data.project.course_name },
-            { done: s.has_config, label: 'Configuration set', detail: s.has_config ? 'config.json present' : 'Using defaults' },
-            { done: s.has_database, label: 'Documents ingested', detail: s.has_database ? 'Vector database populated' : 'No documents ingested yet' },
-            { done: s.has_model, label: 'Model downloaded', detail: s.model_name ? s.model_name : 'No model downloaded' },
-            { done: s.has_finetune_data, label: 'Fine-tuning data prepared', detail: s.finetune_files.length ? s.finetune_files.join(', ') : 'No JSONL files' },
-            { done: s.has_adapter, label: 'Fine-tuning complete', detail: s.has_adapter ? 'adapter.safetensors present' : 'Not fine-tuned yet' },
-            { done: !!s.build_timestamp, label: 'Bundle created', detail: s.build_timestamp
-                ? `Build: ${s.build_timestamp}` + (s.fingerprint ? ` | Fingerprint: ${s.fingerprint}` : '')
-                : 'No bundle created yet' },
+            { done: true, label: 'Project created', detail: data.project.course_name },
+            { done: s.has_config, label: 'Tutor settings configured', detail: s.has_config ? 'Custom settings saved' : 'Using defaults (you can customize later)' },
+            { done: s.has_database, label: 'Course materials imported', detail: s.has_database ? 'Documents indexed and ready' : 'No documents imported yet' },
+            { done: s.has_model, label: 'AI model downloaded', detail: s.model_name ? s.model_name : 'No model selected yet' },
+            { done: s.has_finetune_data, label: 'Training examples prepared', detail: s.finetune_files.length ? s.finetune_files.join(', ') : 'No training data yet (optional step)' },
+            { done: s.has_adapter, label: 'AI customization complete', detail: s.has_adapter ? 'Model has been customized for your course' : 'Not customized yet (optional step)' },
+            { done: !!s.build_timestamp, label: 'Package ready for students', detail: s.build_timestamp
+                ? `Built: ${s.build_timestamp}` + (s.fingerprint ? ` | Fingerprint: ${s.fingerprint}` : '')
+                : 'Not packaged yet' },
         ];
 
         items.forEach(item => {
@@ -483,10 +483,10 @@ async function refreshBundleInfo() {
         const s = data.project.status;
         infoBox.innerHTML = `
             <div class="info-row"><span class="info-label">Version:</span> ${data.project.version}</div>
-            <div class="info-row"><span class="info-label">Model:</span> ${s.model_name || 'Not set'}</div>
-            <div class="info-row"><span class="info-label">Adapter:</span> ${s.has_adapter ? 'Present' : 'Not trained'}</div>
-            <div class="info-row"><span class="info-label">Database:</span> ${s.has_database ? 'Populated' : 'Empty'}</div>
-            <div class="info-row"><span class="info-label">Last build:</span> ${s.build_timestamp || 'Never'}</div>
+            <div class="info-row"><span class="info-label">AI Model:</span> ${s.model_name || 'Not selected'}</div>
+            <div class="info-row"><span class="info-label">Customized:</span> ${s.has_adapter ? 'Yes — trained on your examples' : 'No (optional)'}</div>
+            <div class="info-row"><span class="info-label">Materials:</span> ${s.has_database ? 'Indexed and ready' : 'No documents imported'}</div>
+            <div class="info-row"><span class="info-label">Last built:</span> ${s.build_timestamp || 'Never'}</div>
             <div class="info-row fingerprint-row">
                 <span class="info-label">Fingerprint:</span>
                 <code class="fingerprint">${s.fingerprint || 'Not available'}</code>

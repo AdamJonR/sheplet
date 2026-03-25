@@ -25,11 +25,11 @@
                 <h2>Workflow</h2>
                 <ul id="nav-list" class="item-list">
                     <li data-view="dashboard" class="active">Dashboard</li>
-                    <li data-view="ingest">Ingest Documents</li>
-                    <li data-view="model">Model Setup</li>
-                    <li data-view="finetune">Fine-tune</li>
-                    <li data-view="config">Configuration</li>
-                    <li data-view="bundle">Bundle</li>
+                    <li data-view="ingest">Course Materials</li>
+                    <li data-view="model">AI Model</li>
+                    <li data-view="finetune">Customize AI</li>
+                    <li data-view="config">Tutor Settings</li>
+                    <li data-view="bundle">Package &amp; Share</li>
                 </ul>
             </div>
 
@@ -64,13 +64,13 @@
                 <!-- Ingest View -->
                 <div id="view-ingest" class="view">
                     <div class="view-content">
-                        <h2 class="view-title">Ingest Documents</h2>
-                        <p class="view-desc">Parse source documents, embed them, and store in the vector database. Supports PDF, Word, Excel, CSV, and plain text files.</p>
+                        <h2 class="view-title">Add Course Materials</h2>
+                        <p class="view-desc">Point Sheplet at a folder of your course documents (PDF, Word, Excel, CSV, or plain text). It will read, analyze, and index them so the AI tutor can answer student questions using your materials.</p>
                         <div class="form-group">
-                            <label for="ingest-sources">Source documents directory</label>
-                            <input type="text" id="ingest-sources" placeholder="/path/to/source/documents">
+                            <label for="ingest-sources">Folder containing your course documents</label>
+                            <input type="text" id="ingest-sources" placeholder="/path/to/course/documents">
                         </div>
-                        <button id="ingest-btn" class="btn btn-primary" style="width:auto">Start Ingestion</button>
+                        <button id="ingest-btn" class="btn btn-primary" style="width:auto">Import Documents</button>
                         <div id="ingest-progress" class="progress-display" style="display:none"></div>
                     </div>
                 </div>
@@ -78,21 +78,22 @@
                 <!-- Model View -->
                 <div id="view-model" class="view">
                     <div class="view-content">
-                        <h2 class="view-title">Model Setup</h2>
-                        <p class="view-desc">Download a language model from Hugging Face for local inference.</p>
+                        <h2 class="view-title">AI Model</h2>
+                        <p class="view-desc">Choose and download the AI model that will power your course tutor. Larger models give better answers but need more disk space and memory. All models run entirely on this computer — no internet required after download.</p>
                         <div class="form-group">
-                            <label for="model-name">Model</label>
+                            <label for="model-name">Choose a model</label>
                             <select id="model-name">
-                                <option value="phi-3-mini-4k-instruct" selected>Phi-3 Mini 4K Instruct (3.8B, recommended)</option>
-                                <option value="llama-3.2-1b">Llama 3.2 1B Instruct (local, ~2.5GB)</option>
-                                <option value="llama-3.2-3b">Llama 3.2 3B Instruct (~6GB)</option>
-                                <option value="qwen2.5-0.5b">Qwen2.5 0.5B Instruct (~1GB, ultra-light)</option>
-                                <option value="qwen2.5-1.5b">Qwen2.5 1.5B Instruct (~3GB)</option>
-                                <option value="qwen2.5-3b">Qwen2.5 3B Instruct (~6GB)</option>
-                                <option value="gemma-2b">Gemma 2B IT (~5GB)</option>
-                                <option value="gemma-2-2b">Gemma 2 2B IT (~5GB)</option>
-                                <option value="mistral-7b">Mistral 7B Instruct v0.3 (~14GB, 16GB+ RAM)</option>
+                                <option value="phi-3-mini-4k-instruct" selected>Phi-3 Mini — Best balance of quality &amp; speed (3.8B, ~7 GB, recommended)</option>
+                                <option value="llama-3.2-1b">Llama 3.2 Small — Fast, good for quick Q&amp;A (~2.5 GB)</option>
+                                <option value="llama-3.2-3b">Llama 3.2 Medium — Better answers, moderate size (~6 GB)</option>
+                                <option value="qwen2.5-0.5b">Qwen 2.5 Tiny — Ultra-light, runs on any machine (~1 GB)</option>
+                                <option value="qwen2.5-1.5b">Qwen 2.5 Small — Lightweight with decent quality (~3 GB)</option>
+                                <option value="qwen2.5-3b">Qwen 2.5 Medium — Good quality, moderate size (~6 GB)</option>
+                                <option value="gemma-2b">Gemma — Good general-purpose model (~5 GB)</option>
+                                <option value="gemma-2-2b">Gemma 2 — Improved version of Gemma (~5 GB)</option>
+                                <option value="mistral-7b">Mistral — Highest quality, needs 16 GB+ RAM (~14 GB)</option>
                             </select>
+                            <small class="field-hint">Not sure? Start with Phi-3 Mini. If students have older computers, choose a smaller model.</small>
                         </div>
                         <button id="model-btn" class="btn btn-primary" style="width:auto">Download Model</button>
                         <div id="model-progress" class="progress-display" style="display:none"></div>
@@ -102,39 +103,46 @@
                 <!-- Finetune View -->
                 <div id="view-finetune" class="view">
                     <div class="view-content">
-                        <h2 class="view-title">Fine-tune</h2>
-                        <p class="view-desc">Train a LoRA adapter on your course-specific data using SFT (supervised fine-tuning) or DPO (direct preference optimization).</p>
+                        <h2 class="view-title">Customize AI</h2>
+                        <p class="view-desc">Teach the AI model to respond in a style and tone that fits your course. You provide example question-answer pairs, and Sheplet adjusts the model to match. This step is optional but can significantly improve answer quality.</p>
 
                         <div style="margin-bottom:16px">
-                            <button id="gen-templates-btn" class="btn btn-small">Generate Template Files</button>
+                            <button id="gen-templates-btn" class="btn btn-small">Generate Example Templates</button>
+                            <small class="field-hint" style="display:block;margin-top:4px">Creates starter files with the correct format for your training examples.</small>
                             <span id="gen-templates-status" class="status-text"></span>
                         </div>
 
                         <div class="form-group">
-                            <label for="ft-method">Training Method</label>
+                            <label for="ft-method">Training approach</label>
                             <select id="ft-method">
-                                <option value="sft">SFT (Supervised Fine-Tuning)</option>
-                                <option value="dpo">DPO (Direct Preference Optimization)</option>
+                                <option value="sft">Learn from examples — Teach using question/answer pairs (recommended)</option>
+                                <option value="dpo">Learn from comparisons — Teach using good vs. bad answer pairs</option>
                             </select>
+                            <small class="field-hint">"Learn from examples" is simpler to set up. "Learn from comparisons" can fine-tune tone and style if you provide both good and bad answers.</small>
                         </div>
                         <div class="form-group">
-                            <label for="ft-data">Data File</label>
+                            <label for="ft-data">Training data file</label>
                             <select id="ft-data">
                                 <option value="">No files found</option>
                             </select>
                             <button id="refresh-files-btn" class="btn btn-small" style="margin-top:4px">Refresh Files</button>
                         </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="ft-lr">Learning Rate (optional)</label>
-                                <input type="number" id="ft-lr" step="0.0001" placeholder="default">
+                        <details class="advanced-toggle">
+                            <summary>Advanced options</summary>
+                            <div class="form-row" style="margin-top:8px">
+                                <div class="form-group">
+                                    <label for="ft-lr">Learning rate</label>
+                                    <input type="number" id="ft-lr" step="0.0001" placeholder="auto">
+                                    <small class="field-hint">How aggressively the model adjusts. Lower = more cautious. Leave blank for a sensible default.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ft-epochs">Training passes</label>
+                                    <input type="number" id="ft-epochs" min="1" placeholder="auto">
+                                    <small class="field-hint">How many times the model reviews your examples. More passes can improve quality but takes longer.</small>
+                                </div>
                             </div>
-                            <div class="form-group">
-                                <label for="ft-epochs">Epochs (optional)</label>
-                                <input type="number" id="ft-epochs" min="1" placeholder="default">
-                            </div>
-                        </div>
-                        <button id="finetune-btn" class="btn btn-primary" style="width:auto">Start Training</button>
+                        </details>
+                        <button id="finetune-btn" class="btn btn-primary" style="width:auto;margin-top:12px">Start Training</button>
                         <div id="finetune-progress" class="progress-display" style="display:none"></div>
                     </div>
                 </div>
@@ -142,34 +150,39 @@
                 <!-- Config View -->
                 <div id="view-config" class="view">
                     <div class="view-content">
-                        <h2 class="view-title">Configuration</h2>
-                        <p class="view-desc">Set the system prompt and retrieval parameters for your course. These settings are locked for students — they define how the tutor behaves.</p>
+                        <h2 class="view-title">Tutor Settings</h2>
+                        <p class="view-desc">Control how the AI tutor behaves when students ask questions. These settings are locked for students — only you can change them.</p>
                         <div class="form-group">
-                            <label for="cfg-prompt">System Prompt</label>
-                            <textarea id="cfg-prompt" rows="4" placeholder="You are a helpful tutor..."></textarea>
+                            <label for="cfg-prompt">Tutor instructions</label>
+                            <textarea id="cfg-prompt" rows="4" placeholder="You are a helpful tutor for Biology 101. Always cite the textbook when possible. Do not give direct answers to homework problems — guide students to discover the answer themselves."></textarea>
+                            <small class="field-hint">Tell the AI how to behave: what tone to use, whether to give direct answers or guide students, and any course-specific rules.</small>
                         </div>
                         <div class="form-group">
-                            <label for="cfg-strategy">Retrieval Strategy</label>
+                            <label for="cfg-strategy">How to find relevant materials</label>
                             <select id="cfg-strategy">
-                                <option value="top-k">Top-K</option>
-                                <option value="mmr">MMR (Maximal Marginal Relevance)</option>
+                                <option value="top-k">Best matches — Return the most relevant passages (simple, works well for most courses)</option>
+                                <option value="mmr">Diverse matches — Balance relevance with variety (good for broad topics)</option>
                             </select>
+                            <small class="field-hint">"Best matches" is recommended for most courses. "Diverse matches" works better when students ask broad questions that span multiple topics.</small>
                         </div>
                         <div class="form-group">
-                            <label for="cfg-topk">Top K</label>
+                            <label for="cfg-topk">Number of passages to use</label>
                             <input type="number" id="cfg-topk" min="1" max="100" value="5">
+                            <small class="field-hint">How many passages from your documents the AI reads before answering. More passages = more context but slower responses. 3–7 is typical.</small>
                         </div>
                         <div class="form-group">
-                            <label for="cfg-threshold">Relevance Threshold</label>
+                            <label for="cfg-threshold">Minimum relevance</label>
                             <input type="range" id="cfg-threshold" min="0" max="1" step="0.05" value="0.3">
                             <span id="cfg-threshold-val">0.3</span>
+                            <small class="field-hint">If no passage meets this quality bar, the tutor will decline to answer rather than guess. Higher = stricter (fewer answers but more accurate). Lower = more permissive.</small>
                         </div>
                         <div class="form-group">
-                            <label for="cfg-lambda">MMR Lambda</label>
+                            <label for="cfg-lambda">Diversity balance</label>
                             <input type="range" id="cfg-lambda" min="0" max="1" step="0.1" value="0.5">
                             <span id="cfg-lambda-val">0.5</span>
+                            <small class="field-hint">Only applies to "Diverse matches" mode. Higher = prioritize relevance. Lower = prioritize variety across different topics.</small>
                         </div>
-                        <button id="save-config-btn" class="btn btn-primary" style="width:auto">Save Configuration</button>
+                        <button id="save-config-btn" class="btn btn-primary" style="width:auto">Save Settings</button>
                         <span id="config-status" class="status-text"></span>
                     </div>
                 </div>
@@ -177,19 +190,19 @@
                 <!-- Bundle View -->
                 <div id="view-bundle" class="view">
                     <div class="view-content">
-                        <h2 class="view-title">Bundle &amp; Distribute</h2>
-                        <p class="view-desc">Package your project into a signed .sheplet bundle that students can load. The bundle contains the model, LoRA adapter, embeddings, vector database, and configuration.</p>
+                        <h2 class="view-title">Package &amp; Share</h2>
+                        <p class="view-desc">Package everything into a single <code>.sheplet</code> file that you distribute to students. This file contains the AI model, your course materials index, customizations, and settings — everything students need to run the tutor offline.</p>
                         <div id="bundle-info" class="info-box"></div>
                         <div class="form-group">
-                            <label for="bundle-output">Output file path</label>
-                            <input type="text" id="bundle-output" placeholder="/path/to/course.sheplet">
+                            <label for="bundle-output">Save bundle to</label>
+                            <input type="text" id="bundle-output" placeholder="/path/to/course-name.sheplet">
                         </div>
                         <div class="form-group checkbox-group">
                             <label>
-                                <input type="checkbox" id="bundle-bump"> Bump version number
+                                <input type="checkbox" id="bundle-bump"> Increment version number (use when distributing an update)
                             </label>
                         </div>
-                        <button id="bundle-btn" class="btn btn-primary" style="width:auto">Create Bundle</button>
+                        <button id="bundle-btn" class="btn btn-primary" style="width:auto">Create Package</button>
                         <div id="bundle-progress" class="progress-display" style="display:none"></div>
                     </div>
                 </div>
@@ -206,12 +219,14 @@
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label for="np-course-name">Course Name</label>
+                    <label for="np-course-name">Course name</label>
                     <input type="text" id="np-course-name" placeholder="Introduction to Biology">
+                    <small class="field-hint">The name students will see when they load this course.</small>
                 </div>
                 <div class="form-group">
-                    <label for="np-dir-name">Directory Name</label>
+                    <label for="np-dir-name">Folder name</label>
                     <input type="text" id="np-dir-name" placeholder="bio101">
+                    <small class="field-hint">A short name for the project folder on your computer (auto-generated from course name).</small>
                 </div>
                 <button id="create-project-btn" class="btn btn-primary">Create Project</button>
             </div>

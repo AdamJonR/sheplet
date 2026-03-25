@@ -234,6 +234,32 @@ body {
     border-color: var(--primary);
 }
 
+.field-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    line-height: 1.4;
+}
+
+.advanced-toggle {
+    margin: 12px 0;
+    padding: 10px 12px;
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.advanced-toggle summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.advanced-toggle summary:hover {
+    color: var(--text);
+}
+
 .form-group textarea {
     resize: vertical;
     min-height: 60px;

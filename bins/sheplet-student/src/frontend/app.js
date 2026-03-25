@@ -46,7 +46,7 @@ function showEmptyState() {
         messages.innerHTML = `
             <div class="empty-state">
                 <h2>Welcome to Sheplet</h2>
-                <p>Load a .sheplet bundle to get started, then ask questions about your course materials.</p>
+                <p>Load a course file from your instructor to get started, then ask questions about your course materials.</p>
             </div>
         `;
     }
@@ -110,7 +110,7 @@ submitBundlePath.addEventListener('click', async () => {
     if (!path) return;
     const fingerprint = bundleFingerprintInput.value.trim();
     if (!fingerprint) {
-        alert('Instructor fingerprint is required');
+        alert('Please enter the verification code from your instructor');
         bundleFingerprintInput.focus();
         return;
     }
@@ -198,7 +198,7 @@ async function loadConversation(id) {
 
 newConversationBtn.addEventListener('click', async () => {
     if (!activeCourseId) {
-        alert('Load a course bundle first.');
+        alert('Please load a course first.');
         return;
     }
     try {
@@ -239,14 +239,14 @@ function appendMessage(role, content, citations, blocked) {
         const details = document.createElement('details');
         details.className = 'message-citations';
         const summary = document.createElement('summary');
-        summary.textContent = `${citations.length} source(s)`;
+        summary.textContent = `${citations.length} source${citations.length === 1 ? '' : 's'} used`;
         details.appendChild(summary);
         citations.forEach(c => {
             const citeDiv = document.createElement('div');
             citeDiv.className = 'citation';
             const header = document.createElement('div');
             header.className = 'citation-header';
-            header.textContent = `${c.source_file} (chunk ${c.chunk_index})`;
+            header.textContent = `${c.source_file} (passage ${c.chunk_index + 1})`;
             citeDiv.appendChild(header);
             const body = document.createElement('div');
             body.className = 'citation-body';
@@ -270,7 +270,7 @@ async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text || isStreaming) return;
     if (!activeCourseId) {
-        alert('Load a course bundle first.');
+        alert('Please load a course first.');
         return;
     }
 
@@ -286,12 +286,16 @@ async function sendMessage() {
     assistantContent.innerHTML = '';
     const statusBar = document.createElement('div');
     statusBar.className = 'pipeline-status';
-    const stages = ['Embedding', 'Searching', 'Generating'];
+    const stages = [
+        { key: 'embedding', label: 'Understanding question' },
+        { key: 'searching', label: 'Finding relevant materials' },
+        { key: 'generating', label: 'Writing answer' },
+    ];
     stages.forEach(stage => {
         const span = document.createElement('span');
         span.className = 'pipeline-stage';
-        span.dataset.stage = stage.toLowerCase();
-        span.innerHTML = `<span class="stage-icon">&#9675;</span> ${stage}`;
+        span.dataset.stage = stage.key;
+        span.innerHTML = `<span class="stage-icon">&#9675;</span> ${stage.label}`;
         statusBar.appendChild(span);
     });
     assistantContent.appendChild(statusBar);
@@ -386,14 +390,14 @@ async function sendMessage() {
                             const details = document.createElement('details');
                             details.className = 'message-citations';
                             const summary = document.createElement('summary');
-                            summary.textContent = `${citations.length} source(s)`;
+                            summary.textContent = `${citations.length} source${citations.length === 1 ? '' : 's'} used`;
                             details.appendChild(summary);
                             citations.forEach(c => {
                                 const citeDiv = document.createElement('div');
                                 citeDiv.className = 'citation';
                                 const header = document.createElement('div');
                                 header.className = 'citation-header';
-                                header.textContent = `${c.source_file} (chunk ${c.chunk_index})`;
+                                header.textContent = `${c.source_file} (passage ${c.chunk_index + 1})`;
                                 citeDiv.appendChild(header);
                                 const body = document.createElement('div');
                                 body.className = 'citation-body';
@@ -470,7 +474,7 @@ settingsBtn.addEventListener('click', async () => {
         document.getElementById('setting-lambda').value = settings.mmr_lambda;
         settingsModal.style.display = 'flex';
     } catch (e) {
-        alert('Load a course first to view settings.');
+        alert('Please load a course first to view settings.');
     }
 });
 

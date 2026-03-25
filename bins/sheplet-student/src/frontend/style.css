@@ -384,6 +384,29 @@ body {
     border-color: var(--primary);
 }
 
+.form-group small,
+.field-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    line-height: 1.4;
+}
+
+.settings-intro {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
+.settings-intro code {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
 /* Loading spinner */
 .spinner {
     display: inline-block;
