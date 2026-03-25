@@ -52,7 +52,7 @@ crates/
 - **Default model**: Phi-3-mini-4k-instruct (3.8B params), full-precision SafeTensors
 - **Embedding model**: all-MiniLM-L6-v2, bundled inside `.sheplet` files (~90MB)
 - **Vector DB**: LanceDB (embedded, no server process)
-- **Supported models**: Phi-3 (via candle-transformers::models::phi3) and Llama 3.2 (via candle-transformers::models::llama)
+- **Supported models**: Phi-3, Llama 3.2, Qwen2.5, Gemma, Gemma2, and Mistral — architecture auto-detected from config.json `model_type` field
 - **Bundle format**: `.sheplet` — zstd-compressed archive containing model weights, LoRA adapter, embeddings, LanceDB, and config, signed with Ed25519
 - **Rust edition 2024** across the workspace
 - **Dependencies managed at workspace level** in root `Cargo.toml` — individual crates use `dependency.workspace = true`
