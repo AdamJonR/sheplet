@@ -70,18 +70,6 @@ async fn start_finetune(
     Ok(Json(serde_json::json!({ "task_id": task_id })))
 }
 
-struct SimpleTokenizer;
-
-impl finetune::sft::Tokenize for SimpleTokenizer {
-    fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
-        Ok(text
-            .split_whitespace()
-            .enumerate()
-            .map(|(i, _)| i as u32)
-            .collect())
-    }
-}
-
 fn run_finetune(
     project_path: &std::path::Path,
     method: &str,
@@ -172,6 +160,13 @@ fn run_finetune(
             detail: format!("{arch_name} model loaded with LoRA layers"),
         });
 
+        // Train on the same chat template used at inference (system prompt,
+        // user/assistant markers, turn-end token) so the adapter sees the
+        // token distribution it will actually be used with.
+        let system_prompt = crate::project::CourseConfig::load(project_path)
+            .unwrap_or_default()
+            .system_prompt;
+
         match method {
             "sft" => {
                 let _ = tx.send(TaskEvent::StepStarted {
@@ -182,6 +177,19 @@ fn run_finetune(
                     step: "Loading training data".to_string(),
                     detail: format!("{} SFT examples", examples.len()),
                 });
+
+                let examples: Vec<finetune::SftExample> = examples
+                    .into_iter()
+                    .map(|ex| {
+                        let (input, output) = rag::format_training_example(
+                            arch,
+                            &system_prompt,
+                            &ex.input,
+                            &ex.output,
+                        );
+                        finetune::SftExample { input, output }
+                    })
+                    .collect();
 
                 let mut config = finetune::sft::SftConfig::default();
                 if let Some(lr) = learning_rate {
@@ -212,6 +220,22 @@ fn run_finetune(
                     detail: format!("{} DPO examples", examples.len()),
                 });
 
+                let turn_end = rag::turn_end_token(arch);
+                let examples: Vec<finetune::DpoExample> = examples
+                    .into_iter()
+                    .map(|ex| finetune::DpoExample {
+                        prompt: rag::prompt::assemble_prompt_for_arch(
+                            arch,
+                            &system_prompt,
+                            &[],
+                            &[],
+                            &ex.prompt,
+                        ),
+                        chosen: format!("{}{}", ex.chosen, turn_end),
+                        rejected: format!("{}{}", ex.rejected, turn_end),
+                    })
+                    .collect();
+
                 let mut config = finetune::dpo::DpoConfig::default();
                 if let Some(lr) = learning_rate {
                     config.learning_rate = lr;
@@ -234,97 +258,11 @@ fn run_finetune(
             _ => anyhow::bail!("Unknown method: {method}"),
         }
     } else {
-        // Standalone LoRA training
-        let _ = tx.send(TaskEvent::Log {
-            message: "No SafeTensors model found; using standalone LoRA training".to_string(),
-        });
-
-        let in_features = 128;
-        let out_features = 128;
-        let frozen_weight =
-            candle_core::Tensor::randn(0f32, 1.0, &[out_features, in_features], &device)?;
-        let frozen = candle_nn::Linear::new(frozen_weight, None);
-        let mut lora = finetune::lora::LoraLinear::new(
-            frozen,
-            in_features,
-            out_features,
-            &lora_config,
-            &device,
-        )?;
-        let tokenizer = SimpleTokenizer;
-
-        match method {
-            "sft" => {
-                let _ = tx.send(TaskEvent::StepStarted {
-                    step: "Loading training data".to_string(),
-                });
-                let examples = finetune::data::load_sft_data(data_path)?;
-                let _ = tx.send(TaskEvent::StepCompleted {
-                    step: "Loading training data".to_string(),
-                    detail: format!("{} SFT examples", examples.len()),
-                });
-
-                let mut config = finetune::sft::SftConfig::default();
-                if let Some(lr) = learning_rate {
-                    config.learning_rate = lr;
-                }
-                if let Some(ep) = epochs {
-                    config.epochs = ep;
-                }
-
-                let _ = tx.send(TaskEvent::StepStarted {
-                    step: "Training".to_string(),
-                });
-                let final_loss = finetune::sft::train_sft(&mut lora, &examples, &config, &tokenizer, &device)?;
-                let _ = tx.send(TaskEvent::StepCompleted {
-                    step: "Training".to_string(),
-                    detail: format!("SFT complete. Final loss: {final_loss:.6}"),
-                });
-
-                lora.save(&adapter_path)?;
-            }
-            "dpo" => {
-                let _ = tx.send(TaskEvent::StepStarted {
-                    step: "Loading training data".to_string(),
-                });
-                let examples = finetune::data::load_dpo_data(data_path)?;
-                let _ = tx.send(TaskEvent::StepCompleted {
-                    step: "Loading training data".to_string(),
-                    detail: format!("{} DPO examples", examples.len()),
-                });
-
-                let mut config = finetune::dpo::DpoConfig::default();
-                if let Some(lr) = learning_rate {
-                    config.learning_rate = lr;
-                }
-                if let Some(ep) = epochs {
-                    config.epochs = ep;
-                }
-
-                let _ = tx.send(TaskEvent::StepStarted {
-                    step: "Training".to_string(),
-                });
-                let final_loss = finetune::dpo::train_dpo(&mut lora, &examples, &config, &tokenizer, &device)?;
-                let _ = tx.send(TaskEvent::StepCompleted {
-                    step: "Training".to_string(),
-                    detail: format!("DPO complete. Final loss: {final_loss:.6}"),
-                });
-
-                lora.save(&adapter_path)?;
-            }
-            _ => anyhow::bail!("Unknown method: {method}"),
-        }
-
-        // Save checkpoint
-        let checkpoint_dir = dirs.root.join("checkpoints");
-        std::fs::create_dir_all(&checkpoint_dir)?;
-        let meta = finetune::checkpoint::CheckpointMeta {
-            epoch: epochs.unwrap_or(3),
-            step: 0,
-            loss: 0.0,
-            lora_config: lora_config.clone(),
-        };
-        finetune::checkpoint::save_checkpoint(&lora, &meta, &checkpoint_dir)?;
+        anyhow::bail!(
+            "No SafeTensors model found in {}. Fine-tuning requires full model \
+             weights — download a model first from the Model step.",
+            dirs.model.display()
+        );
     }
 
     let _ = tx.send(TaskEvent::Log {

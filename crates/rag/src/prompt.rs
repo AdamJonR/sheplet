@@ -85,8 +85,10 @@ pub fn assemble_prompt_llama(
     let estimated_size = estimate_prompt_size(system_prompt, results, history, question);
     let mut prompt = String::with_capacity(estimated_size);
 
-    // System turn
-    prompt.push_str("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n");
+    // System turn. No literal <|begin_of_text|>: the Llama-3 tokenizer's
+    // post-processor adds BOS (prompts are encoded with add_special_tokens),
+    // and including it here too produced a double BOS.
+    prompt.push_str("<|start_header_id|>system<|end_header_id|>\n\n");
     prompt.push_str(system_prompt);
 
     if !results.is_empty() {
@@ -274,11 +276,16 @@ pub fn assemble_prompt_mistral(
     }
 
     // Conversation history (last N turns)
-    let history_start = if history.len() > MAX_HISTORY_TURNS * 2 {
+    let mut history_start = if history.len() > MAX_HISTORY_TURNS * 2 {
         history.len() - MAX_HISTORY_TURNS * 2
     } else {
         0
     };
+    // Mistral's [INST] format requires the slice to open with a user turn;
+    // skip any leading assistant messages left by the window cut
+    while history_start < history.len() && history[history_start].role == Role::Assistant {
+        history_start += 1;
+    }
 
     let mut first_inst = true;
     for msg in &history[history_start..] {
@@ -334,6 +341,33 @@ pub fn assemble_prompt_for_arch(
         ModelArch::Gemma | ModelArch::Gemma2 => assemble_prompt_gemma(system_prompt, results, history, question),
         ModelArch::Mistral => assemble_prompt_mistral(system_prompt, results, history, question),
     }
+}
+
+/// The token that ends an assistant turn for each architecture.
+/// Appended to training targets so the model learns to stop generating.
+pub fn turn_end_token(arch: ModelArch) -> &'static str {
+    match arch {
+        ModelArch::Phi3 => "<|end|>",
+        ModelArch::Llama => "<|eot_id|>",
+        ModelArch::Qwen2 => "<|im_end|>",
+        ModelArch::Gemma | ModelArch::Gemma2 => "<end_of_turn>",
+        ModelArch::Mistral => "</s>",
+    }
+}
+
+/// Format a fine-tuning example with the same chat template used at inference,
+/// so the adapter is trained on the token distribution it will actually see.
+/// Returns `(prompt, response)` where `prompt` ends at the assistant marker and
+/// `response` is the target text followed by the architecture's turn-end token.
+pub fn format_training_example(
+    arch: ModelArch,
+    system_prompt: &str,
+    input: &str,
+    output: &str,
+) -> (String, String) {
+    let prompt = assemble_prompt_for_arch(arch, system_prompt, &[], &[], input);
+    let response = format!("{}{}", output, turn_end_token(arch));
+    (prompt, response)
 }
 
 #[cfg(test)]
@@ -393,8 +427,9 @@ mod tests {
             score: 0.9,
         }];
         let prompt = assemble_prompt_llama("You are a tutor.", &results, &[], "What is mitosis?");
-        assert!(prompt.contains("<|begin_of_text|>"));
-        assert!(prompt.contains("<|start_header_id|>system<|end_header_id|>"));
+        // BOS is added by the tokenizer, not the template (avoids double BOS)
+        assert!(!prompt.contains("<|begin_of_text|>"));
+        assert!(prompt.starts_with("<|start_header_id|>system<|end_header_id|>"));
         assert!(prompt.contains("You are a tutor."));
         assert!(prompt.contains("[1] Mitosis is cell division. (Source: ch3.pdf)"));
         assert!(prompt.contains("<|start_header_id|>user<|end_header_id|>\n\nWhat is mitosis?<|eot_id|>"));
@@ -499,6 +534,33 @@ mod tests {
         let prompt = assemble_prompt_mistral("System.", &[], &[], "Question?");
         assert!(!prompt.contains("Context from course materials"));
         assert!(prompt.contains("[INST] "));
+    }
+
+    #[test]
+    fn test_format_training_example_matches_inference_template() {
+        let (prompt, response) = format_training_example(
+            ModelArch::Phi3,
+            "You are a tutor.",
+            "What is mitosis?",
+            "Cell division.",
+        );
+        // Prompt must be byte-identical to the inference prompt for the same query
+        assert_eq!(
+            prompt,
+            assemble_prompt("You are a tutor.", &[], &[], "What is mitosis?")
+        );
+        assert!(prompt.ends_with("<|assistant|>\n"));
+        assert_eq!(response, "Cell division.<|end|>");
+    }
+
+    #[test]
+    fn test_turn_end_token_per_arch() {
+        assert_eq!(turn_end_token(ModelArch::Phi3), "<|end|>");
+        assert_eq!(turn_end_token(ModelArch::Llama), "<|eot_id|>");
+        assert_eq!(turn_end_token(ModelArch::Qwen2), "<|im_end|>");
+        assert_eq!(turn_end_token(ModelArch::Gemma), "<end_of_turn>");
+        assert_eq!(turn_end_token(ModelArch::Gemma2), "<end_of_turn>");
+        assert_eq!(turn_end_token(ModelArch::Mistral), "</s>");
     }
 
     #[test]

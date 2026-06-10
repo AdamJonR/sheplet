@@ -478,6 +478,14 @@ impl MistralLoraTrainer {
             .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
         Ok(encoding.get_ids().to_vec())
     }
+
+    pub fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
+        Ok(encoding.get_ids().to_vec())
+    }
 }
 
 impl model_utils::LoraTrainable for MistralLoraTrainer {
@@ -487,6 +495,10 @@ impl model_utils::LoraTrainable for MistralLoraTrainer {
 
     fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
         self.encode(text)
+    }
+
+    fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        self.encode_prompt(text)
     }
 
     fn clear_kv_cache(&mut self) {

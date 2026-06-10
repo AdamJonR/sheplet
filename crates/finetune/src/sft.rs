@@ -198,24 +198,44 @@ pub fn train_sft_full(
     let var_tensors: Vec<Tensor> = vars.iter().map(|v| v.as_tensor().clone()).collect();
     trainer.set_lora_tensors(&var_tensors);
 
-    let mut optimizer = AdamW::new_lr(vars.clone(), config.learning_rate)
-        .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
+    // LoRA convention: no weight decay on adapter params (candle's default is 0.01)
+    let mut optimizer = AdamW::new(
+        vars.clone(),
+        candle_nn::ParamsAdamW {
+            lr: config.learning_rate,
+            weight_decay: 0.0,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| FinetuneError::Training(format!("failed to create optimizer: {e}")))?;
 
+    let mut order: Vec<usize> = (0..data.len()).collect();
     for epoch in 0..config.epochs {
+        // Deterministic per-epoch shuffle so example order doesn't bias training
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(epoch as u64);
+        order.shuffle(&mut rng);
+
         let mut epoch_loss_sum = 0.0f64;
         let mut epoch_count = 0usize;
 
-        for example in data {
+        for &example_idx in &order {
+            let example = &data[example_idx];
             trainer.clear_kv_cache();
 
-            // Tokenize input and output separately to find the boundary
+            // Tokenize prompt and response separately and concatenate the ids.
+            // This matches inference exactly: the prompt is encoded standalone
+            // (with the tokenizer's special-token handling, e.g. BOS) and response
+            // tokens follow it, with no BPE merges across the boundary.
             let input_tokens = trainer
-                .encode(&example.input)
+                .encode_prompt(&example.input)
                 .map_err(|e| FinetuneError::Training(format!("tokenize input: {e}")))?;
-            let full_text = format!("{}{}", example.input, example.output);
-            let all_tokens = trainer
-                .encode(&full_text)
-                .map_err(|e| FinetuneError::Training(format!("tokenize: {e}")))?;
+            let response_tokens = trainer
+                .encode(&example.output)
+                .map_err(|e| FinetuneError::Training(format!("tokenize output: {e}")))?;
+            let mut all_tokens = input_tokens.clone();
+            all_tokens.extend_from_slice(&response_tokens);
 
             let seq_len = all_tokens.len().min(config.max_seq_len);
             let input_len = input_tokens.len().min(seq_len);

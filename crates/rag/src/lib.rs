@@ -9,3 +9,4 @@ pub use error::{RagError, Result};
 pub use inference::{detect_model_arch, ModelArch, PhiGenerator, TextGenerator};
 pub use db::SearchResult;
 pub use pipeline::{PreparedQuery, RagPipeline};
+pub use prompt::{format_training_example, turn_end_token};

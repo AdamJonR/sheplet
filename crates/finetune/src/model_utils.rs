@@ -40,6 +40,16 @@ impl RotaryEmbedding {
             .step_by(2)
             .map(|i| 1f32 / rope_theta.powf(i as f64 / head_dim as f64) as f32)
             .collect();
+        Self::new_with_inv_freq(dtype, inv_freq, max_seq_len, dev)
+    }
+
+    /// Construct from precomputed inverse frequencies (e.g. llama3 rope scaling).
+    pub fn new_with_inv_freq(
+        dtype: DType,
+        inv_freq: Vec<f32>,
+        max_seq_len: usize,
+        dev: &Device,
+    ) -> Result<Self> {
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
@@ -212,6 +222,10 @@ mod tests {
 pub trait LoraTrainable {
     fn device(&self) -> &Device;
     fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>>;
+    /// Encode with the tokenizer's special-token post-processing enabled (e.g. BOS).
+    /// Used for the prompt portion of training examples, matching how inference
+    /// encodes prompts; response text must use `encode` so no BOS is inserted mid-sequence.
+    fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>>;
     fn clear_kv_cache(&mut self);
     fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>;
     fn forward_reference(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>;

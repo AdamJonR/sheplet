@@ -85,31 +85,40 @@ impl RagPipeline {
     }
 
     /// Check relevance, build citations, and assemble prompt from search results.
+    ///
+    /// Only chunks at or above the relevance threshold are used: sub-threshold
+    /// chunks must not leak into the prompt or citations, and a query with no
+    /// passing chunks (including zero retrieval results) is blocked — this is
+    /// the academic-integrity gate.
     pub fn assemble_from_results(
         &self,
         results: &[db::SearchResult],
         history: &[Message],
         question: &str,
     ) -> PreparedQuery {
-        let any_relevant = results.iter().any(|r| {
-            let similarity = r.score as f64;
-            debug!(
-                source = %r.source_file,
-                chunk = r.chunk_index,
-                similarity,
-                threshold = self.config.relevance_threshold,
-                "retrieval score"
-            );
-            similarity >= self.config.relevance_threshold
-        });
+        let relevant: Vec<db::SearchResult> = results
+            .iter()
+            .filter(|r| {
+                let similarity = r.score as f64;
+                debug!(
+                    source = %r.source_file,
+                    chunk = r.chunk_index,
+                    similarity,
+                    threshold = self.config.relevance_threshold,
+                    "retrieval score"
+                );
+                similarity >= self.config.relevance_threshold
+            })
+            .cloned()
+            .collect();
 
-        if !any_relevant && !results.is_empty() {
+        if relevant.is_empty() {
             return PreparedQuery::Blocked {
                 message: "I don't have enough relevant course materials to answer this question. Please ask something related to the course content.".to_string(),
             };
         }
 
-        let citations: Vec<Citation> = results
+        let citations: Vec<Citation> = relevant
             .iter()
             .map(|r| Citation {
                 source_file: r.source_file.clone(),
@@ -121,7 +130,7 @@ impl RagPipeline {
         let prompt = assemble_prompt_for_arch(
             self.model_arch,
             &self.config.system_prompt,
-            results,
+            &relevant,
             history,
             question,
         );

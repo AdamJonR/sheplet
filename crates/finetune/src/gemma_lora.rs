@@ -1,10 +1,19 @@
-//! Gemma model with LoRA injection for fine-tuning.
+//! Gemma and Gemma2 models with LoRA injection for fine-tuning.
 //!
 //! Key differences from Llama:
 //! - Custom GemmaRmsNorm: uses `(1 + weight) * x_normed` instead of `weight * x_normed`
 //! - Embedding scaling: hidden states multiplied by sqrt(hidden_size)
 //! - Separate q/k/v/o projections, bias controlled by config
 //! - Tied word embeddings (always)
+//!
+//! Gemma2 additions (detected from config.json `model_type`), mirroring
+//! candle-transformers' gemma2.rs so training matches inference:
+//! - `post_attention_layernorm` is applied to the attention output *before*
+//!   the residual add, and the MLP is wrapped in `pre_feedforward_layernorm`
+//!   / `post_feedforward_layernorm`
+//! - Attention logit softcapping (`tanh(x/cap)*cap`) before the mask
+//! - Final logit softcapping after `lm_head`
+//! - Sliding-window attention mask when `sliding_window` is set
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,8 +72,19 @@ pub struct GemmaLoraConfig {
     pub max_position_embeddings: usize,
     #[serde(default)]
     pub attention_bias: bool,
-    #[serde(default = "default_hidden_act")]
-    pub hidden_act: candle_nn::Activation,
+    #[serde(default)]
+    pub hidden_act: Option<candle_nn::Activation>,
+    #[serde(default)]
+    pub hidden_activation: Option<candle_nn::Activation>,
+    /// "gemma" or "gemma2" — selects the layer layout and softcapping.
+    #[serde(default)]
+    pub model_type: String,
+    #[serde(default)]
+    pub final_logit_softcapping: Option<f64>,
+    #[serde(default)]
+    pub attn_logit_softcapping: Option<f64>,
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
 }
 
 fn default_rope_theta() -> f64 {
@@ -75,8 +95,25 @@ fn default_max_position_embeddings() -> usize {
     4096
 }
 
-fn default_hidden_act() -> candle_nn::Activation {
-    candle_nn::Activation::Gelu
+impl GemmaLoraConfig {
+    pub fn is_gemma2(&self) -> bool {
+        self.model_type == "gemma2"
+    }
+
+    /// Activation resolution matching the inference path: Gemma1 prefers
+    /// `hidden_act` (the config sanitizer drops `hidden_activation` when both
+    /// are present); Gemma2 uses `hidden_activation` (gelu_pytorch_tanh).
+    pub fn act(&self) -> candle_nn::Activation {
+        if self.is_gemma2() {
+            self.hidden_activation
+                .or(self.hidden_act)
+                .unwrap_or(candle_nn::Activation::GeluPytorchTanh)
+        } else {
+            self.hidden_act
+                .or(self.hidden_activation)
+                .unwrap_or(candle_nn::Activation::Gelu)
+        }
+    }
 }
 
 /// Attention block with separate LoRA on q, k, v, o projections.
@@ -91,6 +128,7 @@ struct LoraAttention {
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
+    attn_logit_softcapping: Option<f64>,
 }
 
 fn load_linear(
@@ -152,6 +190,7 @@ impl LoraAttention {
             num_kv_heads,
             num_kv_groups: num_heads / num_kv_heads,
             head_dim,
+            attn_logit_softcapping: cfg.attn_logit_softcapping,
         })
     }
 
@@ -208,6 +247,12 @@ impl LoraAttention {
         let scale = 1f64 / f64::sqrt(self.head_dim as f64);
         let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
+        // Gemma2 attention logit softcapping, applied before the mask
+        let attn_weights = match self.attn_logit_softcapping {
+            None => attn_weights,
+            Some(sc) => ((attn_weights / sc)?.tanh()? * sc)?,
+        };
+
         let attn_weights = match attention_mask {
             None => attn_weights,
             Some(mask) => attn_weights.broadcast_add(mask)?,
@@ -245,7 +290,7 @@ impl Mlp {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.act(),
         })
     }
 }
@@ -263,6 +308,9 @@ struct DecoderLayer {
     mlp: Mlp,
     input_layernorm: GemmaRmsNorm,
     post_attention_layernorm: GemmaRmsNorm,
+    /// Gemma2 only: norms wrapping the MLP block.
+    pre_feedforward_layernorm: Option<GemmaRmsNorm>,
+    post_feedforward_layernorm: Option<GemmaRmsNorm>,
 }
 
 impl DecoderLayer {
@@ -282,11 +330,29 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
+        let (pre_feedforward_layernorm, post_feedforward_layernorm) = if cfg.is_gemma2() {
+            (
+                Some(GemmaRmsNorm::new(
+                    cfg.hidden_size,
+                    cfg.rms_norm_eps,
+                    vb.pp("pre_feedforward_layernorm"),
+                )?),
+                Some(GemmaRmsNorm::new(
+                    cfg.hidden_size,
+                    cfg.rms_norm_eps,
+                    vb.pp("post_feedforward_layernorm"),
+                )?),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
             self_attn,
             mlp,
             input_layernorm,
             post_attention_layernorm,
+            pre_feedforward_layernorm,
+            post_feedforward_layernorm,
         })
     }
 
@@ -297,21 +363,74 @@ impl DecoderLayer {
         seqlen_offset: usize,
         use_lora: bool,
     ) -> Result<Tensor> {
-        let residual = xs;
-        let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(&xs, attention_mask, seqlen_offset, use_lora)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self.post_attention_layernorm.forward(&xs)?;
-        let xs = xs.apply(&self.mlp)?;
-        residual + xs
+        if let (Some(pre_ffn), Some(post_ffn)) = (
+            self.pre_feedforward_layernorm.as_ref(),
+            self.post_feedforward_layernorm.as_ref(),
+        ) {
+            // Gemma2 layout: post-attn norm before the residual add, MLP
+            // wrapped in pre/post-feedforward norms
+            let residual = xs;
+            let xs = self.input_layernorm.forward(xs)?;
+            let xs = self
+                .self_attn
+                .forward(&xs, attention_mask, seqlen_offset, use_lora)?;
+            let xs = self.post_attention_layernorm.forward(&xs)?;
+            let xs = (xs + residual)?;
+            let residual = &xs;
+            let xs = pre_ffn.forward(&xs)?;
+            let xs = xs.apply(&self.mlp)?;
+            let xs = post_ffn.forward(&xs)?;
+            residual + xs
+        } else {
+            // Gemma1 layout
+            let residual = xs;
+            let xs = self.input_layernorm.forward(xs)?;
+            let xs = self
+                .self_attn
+                .forward(&xs, attention_mask, seqlen_offset, use_lora)?;
+            let xs = (xs + residual)?;
+            let residual = &xs;
+            let xs = self.post_attention_layernorm.forward(&xs)?;
+            let xs = xs.apply(&self.mlp)?;
+            residual + xs
+        }
     }
 
     fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache();
     }
+}
+
+/// Sliding-window causal mask matching candle-transformers' gemma2.rs:
+/// position j is masked when `i < j || j + sliding_window < i`.
+fn prepare_gemma2_attention_mask(
+    b_size: usize,
+    tgt_len: usize,
+    seqlen_offset: usize,
+    sliding_window: usize,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let mask: Vec<_> = (0..tgt_len)
+        .flat_map(|i| {
+            (0..tgt_len).map(move |j| {
+                if i < j || j + sliding_window < i {
+                    f32::NEG_INFINITY
+                } else {
+                    0.
+                }
+            })
+        })
+        .collect();
+    let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
+    let mask = if seqlen_offset > 0 {
+        let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, device)?;
+        Tensor::cat(&[&mask0, &mask], D::Minus1)?
+    } else {
+        mask
+    };
+    mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        .to_dtype(dtype)
 }
 
 /// Gemma model with LoRA layers for fine-tuning.
@@ -323,6 +442,8 @@ pub struct GemmaLoraModel {
     hidden_size: usize,
     device: Device,
     dtype: DType,
+    final_logit_softcapping: Option<f64>,
+    sliding_window: Option<usize>,
 }
 
 impl GemmaLoraModel {
@@ -365,6 +486,8 @@ impl GemmaLoraModel {
             hidden_size: cfg.hidden_size,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            final_logit_softcapping: cfg.final_logit_softcapping,
+            sliding_window: if cfg.is_gemma2() { cfg.sliding_window } else { None },
         })
     }
 
@@ -403,6 +526,16 @@ impl GemmaLoraModel {
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
+        } else if let Some(sliding_window) = self.sliding_window {
+            // Gemma2: candle applies one sliding-window mask to all layers
+            Some(prepare_gemma2_attention_mask(
+                b_size,
+                seq_len,
+                seqlen_offset,
+                sliding_window,
+                &self.device,
+                self.dtype,
+            )?)
         } else {
             Some(model_utils::prepare_decoder_attention_mask(
                 b_size,
@@ -424,6 +557,11 @@ impl GemmaLoraModel {
             None => xs.narrow(1, seq_len - 1, 1)?,
         };
         let logits = xs.apply(&self.norm)?.apply(&self.lm_head)?;
+        // Gemma2 final logit softcapping
+        let logits = match self.final_logit_softcapping {
+            None => logits,
+            Some(sc) => ((logits / sc)?.tanh()? * sc)?,
+        };
         Ok(logits)
     }
 
@@ -521,6 +659,14 @@ impl GemmaLoraTrainer {
             .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
         Ok(encoding.get_ids().to_vec())
     }
+
+    pub fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
+        Ok(encoding.get_ids().to_vec())
+    }
 }
 
 impl model_utils::LoraTrainable for GemmaLoraTrainer {
@@ -530,6 +676,10 @@ impl model_utils::LoraTrainable for GemmaLoraTrainer {
 
     fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
         self.encode(text)
+    }
+
+    fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        self.encode_prompt(text)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -612,6 +762,70 @@ mod tests {
         assert_eq!(config.num_hidden_layers, 18);
         assert_eq!(config.head_dim, 256);
         assert!(!config.attention_bias);
+    }
+
+    #[test]
+    fn test_gemma2_config_parse() {
+        // Shape of google/gemma-2-2b config.json
+        let json = r#"{
+            "model_type": "gemma2",
+            "vocab_size": 256000,
+            "hidden_size": 2304,
+            "intermediate_size": 9216,
+            "num_hidden_layers": 26,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 4,
+            "head_dim": 256,
+            "rms_norm_eps": 1e-06,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 8192,
+            "attn_logit_softcapping": 50.0,
+            "final_logit_softcapping": 30.0,
+            "sliding_window": 4096,
+            "hidden_act": "gelu_pytorch_tanh",
+            "hidden_activation": "gelu_pytorch_tanh"
+        }"#;
+        let config: GemmaLoraConfig = serde_json::from_str(json).unwrap();
+        assert!(config.is_gemma2());
+        assert_eq!(config.attn_logit_softcapping, Some(50.0));
+        assert_eq!(config.final_logit_softcapping, Some(30.0));
+        assert_eq!(config.sliding_window, Some(4096));
+        assert_eq!(config.act(), candle_nn::Activation::GeluPytorchTanh);
+    }
+
+    #[test]
+    fn test_gemma1_config_has_no_gemma2_features() {
+        let json = r#"{
+            "model_type": "gemma",
+            "vocab_size": 256000,
+            "hidden_size": 2048,
+            "intermediate_size": 16384,
+            "num_hidden_layers": 18,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 1,
+            "head_dim": 256,
+            "rms_norm_eps": 1e-06
+        }"#;
+        let config: GemmaLoraConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.is_gemma2());
+        assert_eq!(config.attn_logit_softcapping, None);
+        assert_eq!(config.final_logit_softcapping, None);
+        assert_eq!(config.act(), candle_nn::Activation::Gelu);
+    }
+
+    #[test]
+    fn test_gemma2_sliding_mask_matches_candle() {
+        let device = Device::Cpu;
+        // window=2, len=4: candle masks j when i < j || j + 2 < i
+        let mask = prepare_gemma2_attention_mask(1, 4, 0, 2, &device, DType::F32).unwrap();
+        let m: Vec<Vec<f32>> = mask.squeeze(0).unwrap().squeeze(0).unwrap().to_vec2().unwrap();
+        for i in 0..4 {
+            for j in 0..4 {
+                let expect_masked = i < j || j + 2 < i;
+                let is_masked = m[i][j].is_infinite();
+                assert_eq!(is_masked, expect_masked, "mismatch at [{i}][{j}]");
+            }
+        }
     }
 
     #[test]

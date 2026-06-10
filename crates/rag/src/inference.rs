@@ -13,10 +13,6 @@ use tokenizers::Tokenizer;
 
 use crate::error::{RagError, Result};
 
-/// Minimum tokens to generate before allowing EOS.
-/// Prevents models with high EOS logits (e.g. Qwen2.5-1.5B) from stopping after 1-2 tokens.
-const MIN_GENERATION_TOKENS: usize = 5;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelArch {
     Phi3,
@@ -112,20 +108,21 @@ impl InferenceModel {
         }
     }
 
-    fn clear_kv_cache(&mut self) {
+    fn clear_kv_cache(&mut self) -> Result<()> {
         match self {
             InferenceModel::Phi(m) => m.clear_kv_cache(),
             InferenceModel::Llama { config, dtype, device, cache, .. } => {
-                // Recreate cache to clear KV state (kvs field is private)
-                if let Ok(new_cache) = ct_llama::Cache::new(true, *dtype, config, device) {
-                    *cache = new_cache;
-                }
+                // Recreate cache to clear KV state (kvs field is private).
+                // Propagate failure: silently keeping the previous request's
+                // cache would contaminate the next generation.
+                *cache = ct_llama::Cache::new(true, *dtype, config, device)?;
             }
             InferenceModel::Qwen2(m) => m.clear_kv_cache(),
             InferenceModel::Gemma(m) => m.clear_kv_cache(),
             InferenceModel::Gemma2(m) => m.clear_kv_cache(),
             InferenceModel::Mistral(m) => m.clear_kv_cache(),
         }
+        Ok(())
     }
 }
 
@@ -498,34 +495,39 @@ impl PhiGenerator {
         })
     }
 
+    /// Context window safety guard: if the prompt plus generation budget
+    /// exceeds the model's context window, truncate from the middle,
+    /// preserving the start (system prompt) and end (question).
+    fn truncate_to_context(&self, tokens: Vec<u32>, max_tokens: usize) -> Vec<u32> {
+        let headroom = 64;
+        if tokens.len() + max_tokens + headroom <= self.max_context_tokens {
+            return tokens;
+        }
+        let available = self.max_context_tokens.saturating_sub(max_tokens + headroom);
+        if tokens.len() <= available || available == 0 {
+            return tokens;
+        }
+        eprintln!(
+            "WARNING: prompt ({} tokens) exceeds safe limit ({} tokens for context window {}). Truncating.",
+            tokens.len(), available, self.max_context_tokens
+        );
+        let keep_start = available / 2;
+        let keep_end = available - keep_start;
+        let end_start = tokens.len() - keep_end;
+        let mut truncated = tokens[..keep_start].to_vec();
+        truncated.extend_from_slice(&tokens[end_start..]);
+        truncated
+    }
+
     fn generate_tokens(&mut self, prompt: &str, max_tokens: usize) -> Result<Vec<u32>> {
-        self.model.clear_kv_cache();
+        self.model.clear_kv_cache()?;
         let encoding = self
             .tokenizer
             .encode(prompt, true)
             ?;
         let input_ids = encoding.get_ids();
-        let mut tokens: Vec<u32> = input_ids.to_vec();
+        let mut tokens: Vec<u32> = self.truncate_to_context(input_ids.to_vec(), max_tokens);
         let mut generated = Vec::new();
-
-        // Context window safety guard: warn if prompt is too long
-        let headroom = 64;
-        if tokens.len() + max_tokens + headroom > self.max_context_tokens {
-            let available = self.max_context_tokens.saturating_sub(max_tokens + headroom);
-            if tokens.len() > available {
-                eprintln!(
-                    "WARNING: prompt ({} tokens) exceeds safe limit ({} tokens for context window {}). Truncating.",
-                    tokens.len(), available, self.max_context_tokens
-                );
-                // Truncate from the middle, preserving start (system prompt) and end (question)
-                let keep_start = available / 2;
-                let keep_end = available - keep_start;
-                let end_start = tokens.len() - keep_end;
-                let mut truncated = tokens[..keep_start].to_vec();
-                truncated.extend_from_slice(&tokens[end_start..]);
-                tokens = truncated;
-            }
-        }
 
         let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input, 0)?;
@@ -556,12 +558,8 @@ impl PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            // Mask all special tokens during minimum generation window, then only non-EOS
-            let logits = if generated.len() < MIN_GENERATION_TOKENS {
-                mask_token_ids(&logits, &self.special_token_ids)?
-            } else {
-                mask_token_ids(&logits, &self.non_eos_special_ids)?
-            };
+            // Mask non-EOS special tokens; EOS is allowed so the model can stop naturally
+            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
             let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
@@ -615,13 +613,13 @@ impl TextGenerator for PhiGenerator {
         max_tokens: usize,
         tx: mpsc::Sender<Result<String>>,
     ) -> Result<()> {
-        self.model.clear_kv_cache();
+        self.model.clear_kv_cache()?;
         let encoding = self
             .tokenizer
             .encode(prompt, true)
             ?;
         let input_ids = encoding.get_ids();
-        let mut tokens: Vec<u32> = input_ids.to_vec();
+        let mut tokens: Vec<u32> = self.truncate_to_context(input_ids.to_vec(), max_tokens);
 
         let SamplingConfig { temperature, top_p, repetition_penalty } = self.sampling;
 
@@ -652,12 +650,8 @@ impl TextGenerator for PhiGenerator {
             let input = Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, tokens.len() - 1)?;
             let logits = last_token_logits(&logits)?;
-            // Mask all special tokens during minimum generation window, then only non-EOS
-            let logits = if all_generated.len() < MIN_GENERATION_TOKENS {
-                mask_token_ids(&logits, &self.special_token_ids)?
-            } else {
-                mask_token_ids(&logits, &self.non_eos_special_ids)?
-            };
+            // Mask non-EOS special tokens; EOS is allowed so the model can stop naturally
+            let logits = mask_token_ids(&logits, &self.non_eos_special_ids)?;
             let next_token = sample_token(&logits, temperature, top_p, repetition_penalty, &all_generated)?;
 
             if self.eos_token_ids.contains(&next_token) {
@@ -696,7 +690,9 @@ impl TextGenerator for PhiGenerator {
     }
 
     fn clear_cache(&mut self) {
-        self.model.clear_kv_cache();
+        if let Err(e) = self.model.clear_kv_cache() {
+            eprintln!("WARNING: failed to clear KV cache: {e}");
+        }
     }
 }
 
@@ -709,7 +705,7 @@ fn check_stop_sequences(text: &str, stop_seqs: &[String]) -> Option<usize> {
         .min()
 }
 
-/// Clean up model output: trim, remove leaked special tokens, fix stuttering prefix.
+/// Clean up model output: trim and remove leaked special tokens.
 fn clean_output(text: &str) -> String {
     let mut result = text.trim().to_string();
 
@@ -723,25 +719,6 @@ fn clean_output(text: &str) -> String {
     ];
     for tok in &leaked_tokens {
         result = result.replace(tok, "");
-    }
-
-    // Detect and remove stuttering prefix:
-    // e.g. "According\nBased\nAccording to..." -> "According to..."
-    let lines: Vec<&str> = result.lines().collect();
-    if lines.len() >= 3 {
-        // Check if first few lines are single-word false starts
-        let mut stutter_end = 0;
-        for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            if i < lines.len() - 1 && !trimmed.is_empty() && trimmed.split_whitespace().count() <= 2 && !trimmed.ends_with('.') {
-                stutter_end = i + 1;
-            } else {
-                break;
-            }
-        }
-        if stutter_end > 0 && stutter_end < lines.len() {
-            result = lines[stutter_end..].join("\n");
-        }
     }
 
     result.trim().to_string()
@@ -1424,17 +1401,6 @@ fn merge_lora_adapter(
             eprintln!("LoRA merge: WARNING: adapter missing lora_scale tensor, defaulting to 1.0");
             1.0
         });
-
-    // Cap effective scale at 1.0 to prevent outsized impact on small models
-    let scale = if scale > 1.0 {
-        eprintln!(
-            "LoRA merge: WARNING: clamping scale {:.4} to 1.0 to prevent weight corruption",
-            scale
-        );
-        1.0
-    } else {
-        scale
-    };
 
     eprintln!(
         "LoRA merge: found {} LoRA pair(s), scale = {:.4}",

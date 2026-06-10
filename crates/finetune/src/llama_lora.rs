@@ -33,6 +33,21 @@ pub struct LlamaLoraConfig {
     pub tie_word_embeddings: bool,
     #[serde(default = "default_hidden_act")]
     pub hidden_act: candle_nn::Activation,
+    #[serde(default)]
+    pub rope_scaling: Option<LlamaRopeScaling>,
+}
+
+/// Llama 3.x `rope_scaling` block from config.json. Llama 3.2 always ships
+/// this with `rope_type: "llama3"`; candle's inference path applies it, so
+/// training must too or q/k LoRA layers learn against mismatched rotations.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LlamaRopeScaling {
+    pub factor: f32,
+    pub low_freq_factor: f32,
+    pub high_freq_factor: f32,
+    pub original_max_position_embeddings: usize,
+    #[serde(default)]
+    pub rope_type: String,
 }
 
 fn default_rope_theta() -> f64 {
@@ -51,6 +66,40 @@ impl LlamaLoraConfig {
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
     }
+}
+
+/// Inverse RoPE frequencies, with llama3-type rope scaling applied when the
+/// config carries it. Mirrors candle-transformers' `llama::Cache::new` exactly
+/// so training and inference rotate q/k identically.
+fn compute_inv_freq(cfg: &LlamaLoraConfig) -> Vec<f32> {
+    let head_dim = cfg.head_dim();
+    let default: Vec<f32> = (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / head_dim as f64) as f32)
+        .collect();
+
+    let Some(rs) = cfg.rope_scaling.as_ref().filter(|rs| rs.rope_type == "llama3") else {
+        return default;
+    };
+
+    let low_freq_wavelen = rs.original_max_position_embeddings as f32 / rs.low_freq_factor;
+    let high_freq_wavelen = rs.original_max_position_embeddings as f32 / rs.high_freq_factor;
+    default
+        .into_iter()
+        .map(|freq| {
+            let wavelen = 2. * std::f32::consts::PI / freq;
+            if wavelen < high_freq_wavelen {
+                freq
+            } else if wavelen > low_freq_wavelen {
+                freq / rs.factor
+            } else {
+                let smooth = (rs.original_max_position_embeddings as f32 / wavelen
+                    - rs.low_freq_factor)
+                    / (rs.high_freq_factor - rs.low_freq_factor);
+                (1. - smooth) * freq / rs.factor + smooth * freq
+            }
+        })
+        .collect()
 }
 
 /// Attention block with separate LoRA on q, k, v, o projections.
@@ -294,12 +343,10 @@ impl LlamaLoraModel {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
 
-        let head_dim = cfg.head_dim();
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
+        let rotary_emb = Arc::new(RotaryEmbedding::new_with_inv_freq(
             vb.dtype(),
-            head_dim,
+            compute_inv_freq(cfg),
             cfg.max_position_embeddings,
-            cfg.rope_theta,
             vb_m.device(),
         )?);
 
@@ -487,6 +534,14 @@ impl LlamaLoraTrainer {
             .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
         Ok(encoding.get_ids().to_vec())
     }
+
+    pub fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
+        Ok(encoding.get_ids().to_vec())
+    }
 }
 
 impl model_utils::LoraTrainable for LlamaLoraTrainer {
@@ -496,6 +551,10 @@ impl model_utils::LoraTrainable for LlamaLoraTrainer {
 
     fn encode(&self, text: &str) -> anyhow::Result<Vec<u32>> {
         self.encode(text)
+    }
+
+    fn encode_prompt(&self, text: &str) -> anyhow::Result<Vec<u32>> {
+        self.encode_prompt(text)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -599,6 +658,48 @@ mod tests {
         assert!(config.tie_word_embeddings);
         // Default max_position_embeddings
         assert_eq!(config.max_position_embeddings, 131072);
+    }
+
+    #[test]
+    fn test_llama3_rope_scaling_applied() {
+        let json = r#"{
+            "vocab_size": 128256,
+            "hidden_size": 2048,
+            "intermediate_size": 8192,
+            "num_hidden_layers": 16,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 8,
+            "rms_norm_eps": 1e-05,
+            "rope_theta": 500000.0,
+            "rope_scaling": {
+                "factor": 32.0,
+                "low_freq_factor": 1.0,
+                "high_freq_factor": 4.0,
+                "original_max_position_embeddings": 8192,
+                "rope_type": "llama3"
+            }
+        }"#;
+        let config: LlamaLoraConfig = serde_json::from_str(json).unwrap();
+        let scaled = compute_inv_freq(&config);
+
+        let mut unscaled_cfg = config.clone();
+        unscaled_cfg.rope_scaling = None;
+        let unscaled = compute_inv_freq(&unscaled_cfg);
+
+        assert_eq!(scaled.len(), config.head_dim() / 2);
+        // Highest frequency (shortest wavelength) is unscaled
+        assert_eq!(scaled[0], unscaled[0]);
+        // Lowest frequency (longest wavelength) is divided by factor
+        let last = scaled.len() - 1;
+        let ratio = unscaled[last] / scaled[last];
+        assert!(
+            (ratio - 32.0).abs() < 1e-3,
+            "lowest freq should be scaled by factor 32, got ratio {ratio}"
+        );
+        // Scaled frequencies are never larger than unscaled
+        for (s, u) in scaled.iter().zip(&unscaled) {
+            assert!(s <= u);
+        }
     }
 
     #[test]
