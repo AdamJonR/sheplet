@@ -71,10 +71,74 @@ impl RotaryEmbedding {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        // rope_slow, not rope: the fused rope kernel has no backward pass
+        // (apply_op3_no_bwd), which silently severs the autograd graph through
+        // q/k during LoRA training.
+        let q_embed = candle_nn::rotary_emb::rope_slow(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope_slow(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
+}
+
+/// RMS norm for training. `candle_nn::RmsNorm` and `candle_nn::ops::rms_norm`
+/// use a fused kernel registered without a backward pass (apply_op2_no_bwd),
+/// which silently severs the autograd graph — the final pre-lm_head norm cuts
+/// every gradient path to the LoRA adapters. This version uses the
+/// differentiable slow path.
+#[derive(Debug, Clone)]
+pub struct RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNorm {
+    pub fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl candle_core::Module for RmsNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        candle_nn::ops::rms_norm_slow(xs, &self.weight, self.eps as f32)
+    }
+}
+
+/// Softmax over the last dimension for training.
+/// `candle_nn::ops::softmax_last_dim` is a fused kernel with no backward pass;
+/// this delegates to the differentiable composite implementation.
+pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
+    candle_nn::ops::softmax(xs, D::Minus1)
+}
+
+/// Verify that the backward pass produced gradients for the trainable vars.
+/// Ops without a backward implementation (fused kernels registered via
+/// apply_op*_no_bwd) sever the graph silently, so training would otherwise
+/// "succeed" while updating nothing.
+pub fn check_gradient_flow(
+    vars: &[candle_core::Var],
+    grads: &candle_core::backprop::GradStore,
+    context: &str,
+) -> Result<()> {
+    let with_grad = vars
+        .iter()
+        .filter(|v| grads.get(v.as_tensor()).is_some())
+        .count();
+    if with_grad == 0 {
+        return Err(candle_core::Error::Msg(format!(
+            "{context} training: backward pass produced no gradients for any of the {} \
+             LoRA parameters — the autograd graph is disconnected (likely a fused op \
+             without a backward implementation in the forward pass)",
+            vars.len()
+        )));
+    }
+    if with_grad < vars.len() {
+        eprintln!(
+            "{context} warning: only {with_grad}/{} LoRA parameters received gradients",
+            vars.len()
+        );
+    }
+    Ok(())
 }
 
 /// Causal decoder attention mask (no sliding window).
@@ -154,6 +218,56 @@ pub fn load_model_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::{Module, Var};
+
+    /// Apply `f` to a var-backed input and return whether backward produced a
+    /// gradient for it. Fused inference kernels (apply_op*_no_bwd) silently
+    /// drop the graph, so this is the regression check for training ops.
+    fn grad_flows(f: impl Fn(&Tensor) -> Result<Tensor>, shape: &[usize]) -> bool {
+        let device = Device::Cpu;
+        let init = Tensor::rand(0.0f32, 1.0f32, shape, &device).unwrap();
+        let var = Var::from_tensor(&init).unwrap();
+        let out = f(var.as_tensor()).unwrap();
+        let loss = out.sum_all().unwrap();
+        let grads = loss.backward().unwrap();
+        grads.get(var.as_tensor()).is_some()
+    }
+
+    #[test]
+    fn test_rms_norm_is_differentiable() {
+        let device = Device::Cpu;
+        let weight = Tensor::ones(&[8], DType::F32, &device).unwrap();
+        let norm = RmsNorm { weight, eps: 1e-6 };
+        assert!(
+            grad_flows(|x| norm.forward(x), &[2, 4, 8]),
+            "RmsNorm must propagate gradients for LoRA training"
+        );
+    }
+
+    #[test]
+    fn test_softmax_last_dim_is_differentiable() {
+        assert!(
+            grad_flows(softmax_last_dim, &[2, 4, 8]),
+            "softmax_last_dim must propagate gradients for LoRA training"
+        );
+    }
+
+    #[test]
+    fn test_rotary_emb_is_differentiable() {
+        let device = Device::Cpu;
+        let rotary = RotaryEmbedding::new(DType::F32, 8, 16, 10000.0, &device).unwrap();
+        assert!(
+            grad_flows(
+                |q| {
+                    let k = Tensor::rand(0.0f32, 1.0f32, &[1, 2, 4, 8], &device)?;
+                    let (q_embed, _) = rotary.apply_rotary_emb_qkv(q, &k, 0)?;
+                    Ok(q_embed)
+                },
+                &[1, 2, 4, 8]
+            ),
+            "rotary embedding must propagate gradients for LoRA training"
+        );
+    }
 
     #[test]
     fn test_repeat_kv_no_repeat() {

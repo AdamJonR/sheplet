@@ -79,6 +79,9 @@ pub trait TextGenerator: Send {
     fn clear_cache(&mut self);
 }
 
+// One instance exists per loaded course and lives for the whole session, so
+// the per-variant size spread doesn't matter; boxing would only add noise.
+#[allow(clippy::large_enum_variant)]
 enum InferenceModel {
     Phi(ct_phi3::Model),
     Llama {
@@ -417,12 +420,11 @@ impl PhiGenerator {
             ModelArch::Mistral => &["</s>"],
         };
         for tok_str in turn_end_tokens {
-            if let Some(id) = tokenizer.token_to_id(tok_str) {
-                if !eos_token_ids.contains(&id) {
+            if let Some(id) = tokenizer.token_to_id(tok_str)
+                && !eos_token_ids.contains(&id) {
                     eprintln!("Adding turn-end token '{}' (ID {}) to EOS list", tok_str, id);
                     eos_token_ids.push(id);
                 }
-            }
         }
 
         eprintln!("EOS token IDs: {:?}", eos_token_ids);
@@ -443,11 +445,10 @@ impl PhiGenerator {
             "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>",
         ];
         for tok_str in &extra_mask_tokens {
-            if let Some(id) = tokenizer.token_to_id(tok_str) {
-                if !special_token_ids.contains(&id) {
+            if let Some(id) = tokenizer.token_to_id(tok_str)
+                && !special_token_ids.contains(&id) {
                     special_token_ids.push(id);
                 }
-            }
         }
         eprintln!("Special token IDs: {} total", special_token_ids.len());
 
@@ -569,9 +570,9 @@ impl PhiGenerator {
             tokens.push(next_token);
 
             // Check text-level stop sequences
-            if !self.stop_sequences.is_empty() {
-                if let Ok(text) = self.tokenizer.decode(&generated, true) {
-                    if let Some(pos) = check_stop_sequences(&text, &self.stop_sequences) {
+            if !self.stop_sequences.is_empty()
+                && let Ok(text) = self.tokenizer.decode(&generated, true)
+                    && let Some(pos) = check_stop_sequences(&text, &self.stop_sequences) {
                         // Re-encode the truncated text to get the right token count
                         let truncated_text = &text[..pos];
                         if let Ok(enc) = self.tokenizer.encode(truncated_text, false) {
@@ -579,8 +580,6 @@ impl PhiGenerator {
                         }
                         break;
                     }
-                }
-            }
         }
 
         Ok(generated)
@@ -729,11 +728,10 @@ fn clean_output(text: &str) -> String {
 /// Remove `hidden_activation` when `hidden_act` exists (they're always identical).
 fn sanitize_gemma_config(config_str: &str) -> String {
     if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(config_str) {
-        if let Some(obj) = json.as_object_mut() {
-            if obj.contains_key("hidden_act") && obj.contains_key("hidden_activation") {
+        if let Some(obj) = json.as_object_mut()
+            && obj.contains_key("hidden_act") && obj.contains_key("hidden_activation") {
                 obj.remove("hidden_activation");
             }
-        }
         serde_json::to_string(&json).unwrap_or_else(|_| config_str.to_string())
     } else {
         config_str.to_string()

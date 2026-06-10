@@ -57,7 +57,9 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(xs, &self.weight, self.eps as f32)
+        // rms_norm_slow, not rms_norm: the fused kernel has no backward pass
+        // and would silently sever the autograd graph during LoRA training.
+        candle_nn::ops::rms_norm_slow(xs, &self.weight, self.eps as f32)
     }
 }
 
@@ -169,7 +171,7 @@ impl LoraAttention {
             None => attn_weights,
             Some(mask) => attn_weights.broadcast_add(mask)?,
         };
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = model_utils::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights.matmul(&value_states)?;
 
         let attn_output = attn_output

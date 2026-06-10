@@ -26,11 +26,12 @@ fn embed_benchmarks(c: &mut Criterion) {
         }
     };
 
-    let short_text = "What is photosynthesis?";
-    let long_text = "Photosynthesis is the biological process by which green plants and certain \
-        other organisms convert light energy into chemical energy. During this process, plants \
-        absorb carbon dioxide from the atmosphere and water from the soil, using sunlight as the \
-        energy source to produce glucose and oxygen as byproducts.";
+    let short_text = "When was Rome founded?";
+    let long_text = "Rome was traditionally founded in 753 BC, a date calculated by the Roman \
+        scholar Marcus Terentius Varro. According to legend, the city was established by Romulus, \
+        who became its first king and gave the city its name. The city was built on seven hills \
+        overlooking the Tiber River, which provided fresh water, a route for trade, and a natural \
+        defensive barrier for the growing settlement.";
 
     let mut group = c.benchmark_group("embed");
     group.sample_size(50);
@@ -45,15 +46,15 @@ fn embed_benchmarks(c: &mut Criterion) {
 
     let batch: Vec<&str> = vec![
         short_text,
-        "Explain the concept of natural selection.",
-        "What are the main causes of the French Revolution?",
-        "How does cellular respiration produce ATP?",
-        "Describe the structure of DNA.",
-        "What is the difference between mitosis and meiosis?",
-        "Define the term electronegativity.",
-        "How do tectonic plates cause earthquakes?",
-        "What role does RNA play in protein synthesis?",
-        "Explain the water cycle and its importance.",
+        "What was the Roman Senate?",
+        "What are the main causes of the fall of the Republic?",
+        "How did Roman aqueducts move water?",
+        "Describe the structure of the cursus honorum.",
+        "What is the difference between patricians and plebeians?",
+        "Define the term pomerium.",
+        "How does a Roman arch carry weight?",
+        "What role did the tribunes of the plebs play?",
+        "Explain the Twelve Tables and their importance.",
     ];
     group.bench_function("embed_batch_10", |b| {
         b.iter(|| model.embed_batch(&batch).unwrap());

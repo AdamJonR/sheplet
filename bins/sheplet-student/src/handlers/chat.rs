@@ -64,8 +64,8 @@ async fn get_or_create_conversation(
     conversation_id: Option<&str>,
     course_id: &str,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    if let Some(id) = conversation_id {
-        if let Some(conv) = state.conversations.get(id).map_err(|e| {
+    if let Some(id) = conversation_id
+        && let Some(conv) = state.conversations.get(id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -86,7 +86,6 @@ async fn get_or_create_conversation(
             }
             return Ok(id.to_string());
         }
-    }
     let conv = state
         .conversations
         .create_conversation(course_id, "New conversation")

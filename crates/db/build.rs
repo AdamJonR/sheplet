@@ -1,6 +1,6 @@
 fn main() {
-    if std::env::var("PROTOC").is_err() {
-        if let Some(home) = std::env::var_os("HOME") {
+    if std::env::var("PROTOC").is_err()
+        && let Some(home) = std::env::var_os("HOME") {
             let home = std::path::PathBuf::from(home);
             let protoc_candidates = [
                 home.join("miniconda3/envs/ml-env/bin/protoc"),
@@ -15,5 +15,4 @@ fn main() {
                 }
             }
         }
-    }
 }

@@ -191,7 +191,7 @@ pub fn train_sft_full(
     let lora_tensors = trainer.lora_tensors();
     let vars: Vec<Var> = lora_tensors
         .iter()
-        .map(|t| Var::from_tensor(t))
+        .map(Var::from_tensor)
         .collect::<candle_core::Result<Vec<_>>>()?;
 
     // Set var-backed tensors into model so forward passes use tracked tensors
@@ -270,6 +270,9 @@ pub fn train_sft_full(
 
             let mut grads = loss.backward()
                 .map_err(|e| FinetuneError::Training(format!("backward failed: {e}")))?;
+            if epoch == 0 && epoch_count == 0 {
+                crate::model_utils::check_gradient_flow(&vars, &grads, "SFT")?;
+            }
             clip_grad_norm(&vars, &mut grads, 1.0)?;
             optimizer.step(&grads)
                 .map_err(|e| FinetuneError::Training(format!("optimizer step failed: {e}")))?;

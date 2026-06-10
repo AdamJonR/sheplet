@@ -257,7 +257,7 @@ impl LoraAttention {
             None => attn_weights,
             Some(mask) => attn_weights.broadcast_add(mask)?,
         };
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = model_utils::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights.matmul(&value_states)?;
 
         let attn_output = attn_output

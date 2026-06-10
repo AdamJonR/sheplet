@@ -35,6 +35,12 @@ pub struct CourseInfo {
     pub is_active: bool,
 }
 
+impl Default for CourseManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CourseManager {
     pub fn new() -> Self {
         Self {
@@ -164,8 +170,8 @@ impl CourseManager {
             .collect();
 
         // Also include the active course's metadata
-        if let (Some(active), Some(active_id)) = (&self.active, &self.active_id) {
-            if !courses.iter().any(|c| c.id == *active_id) {
+        if let (Some(active), Some(active_id)) = (&self.active, &self.active_id)
+            && !courses.iter().any(|c| c.id == *active_id) {
                 courses.push(CourseInfo {
                     id: active_id.clone(),
                     course_name: active.metadata.manifest.course_name.clone(),
@@ -174,7 +180,6 @@ impl CourseManager {
                     is_active: true,
                 });
             }
-        }
 
         courses
     }

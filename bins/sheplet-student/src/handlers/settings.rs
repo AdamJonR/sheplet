@@ -61,8 +61,8 @@ async fn update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     // Validate inputs
-    if let Some(top_k) = req.top_k {
-        if top_k == 0 || top_k > 100 {
+    if let Some(top_k) = req.top_k
+        && (top_k == 0 || top_k > 100) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -70,9 +70,8 @@ async fn update_settings(
                 }),
             ));
         }
-    }
-    if let Some(threshold) = req.relevance_threshold {
-        if !(0.0..=1.0).contains(&threshold) {
+    if let Some(threshold) = req.relevance_threshold
+        && !(0.0..=1.0).contains(&threshold) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -80,9 +79,8 @@ async fn update_settings(
                 }),
             ));
         }
-    }
-    if let Some(lambda) = req.mmr_lambda {
-        if !(0.0..=1.0).contains(&lambda) {
+    if let Some(lambda) = req.mmr_lambda
+        && !(0.0..=1.0).contains(&lambda) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -90,9 +88,8 @@ async fn update_settings(
                 }),
             ));
         }
-    }
-    if let Some(ref strategy) = req.retrieval_strategy {
-        if !["similarity", "mmr"].contains(&strategy.as_str()) {
+    if let Some(ref strategy) = req.retrieval_strategy
+        && !["similarity", "mmr"].contains(&strategy.as_str()) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -100,7 +97,6 @@ async fn update_settings(
                 }),
             ));
         }
-    }
 
     let courses = state.courses.read().await;
     let active = courses.active().ok_or_else(|| {
@@ -116,8 +112,8 @@ async fn update_settings(
     // instructor in the bundle config and may only be raised, never lowered —
     // lowering it would let off-syllabus queries through the blocking gate.
     let instructor_threshold = active.metadata.config.relevance_threshold;
-    if let Some(threshold) = req.relevance_threshold {
-        if threshold < instructor_threshold {
+    if let Some(threshold) = req.relevance_threshold
+        && threshold < instructor_threshold {
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(ErrorResponse {
@@ -127,7 +123,6 @@ async fn update_settings(
                 }),
             ));
         }
-    }
 
     active.pipeline.write().await.update_settings(
         req.retrieval_strategy,

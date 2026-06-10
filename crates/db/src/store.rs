@@ -302,15 +302,14 @@ impl VectorStore {
         let Ok(count) = table.count_rows(None).await else {
             return;
         };
-        if count >= min_rows {
-            if let Err(e) = table
+        if count >= min_rows
+            && let Err(e) = table
                 .create_index(&["vector"], lancedb::index::Index::Auto)
                 .execute()
                 .await
             {
                 warn!("Failed to create ANN index (brute-force will be used): {e}");
             }
-        }
     }
 
     // ---- internal helpers ----

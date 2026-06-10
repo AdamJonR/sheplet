@@ -43,15 +43,12 @@ fn extract_paragraph_text(paragraph: &docx_rs::Paragraph) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     for child in &paragraph.children {
-        match child {
-            docx_rs::ParagraphChild::Run(run) => {
-                for run_child in &run.children {
-                    if let docx_rs::RunChild::Text(text) = run_child {
-                        parts.push(text.text.clone());
-                    }
+        if let docx_rs::ParagraphChild::Run(run) = child {
+            for run_child in &run.children {
+                if let docx_rs::RunChild::Text(text) = run_child {
+                    parts.push(text.text.clone());
                 }
             }
-            _ => {}
         }
     }
 
@@ -71,14 +68,11 @@ fn extract_table_text(table: &docx_rs::Table) -> String {
                         docx_rs::TableRowChild::TableCell(tc) => {
                             let mut cell_text_parts: Vec<String> = Vec::new();
                             for child in &tc.children {
-                                match child {
-                                    docx_rs::TableCellContent::Paragraph(p) => {
-                                        let t = extract_paragraph_text(p);
-                                        if !t.is_empty() {
-                                            cell_text_parts.push(t);
-                                        }
+                                if let docx_rs::TableCellContent::Paragraph(p) = child {
+                                    let t = extract_paragraph_text(p);
+                                    if !t.is_empty() {
+                                        cell_text_parts.push(t);
                                     }
-                                    _ => {}
                                 }
                             }
                             cells.push(cell_text_parts.join(" "));

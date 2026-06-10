@@ -30,7 +30,7 @@ pub fn assemble_prompt(
     if !results.is_empty() {
         prompt.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
+            let _ = writeln!(prompt, "[{}] {} (Source: {})", i + 1, r.text, r.source_file);
         }
     }
     prompt.push_str("<|end|>\n");
@@ -94,7 +94,7 @@ pub fn assemble_prompt_llama(
     if !results.is_empty() {
         prompt.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
+            let _ = writeln!(prompt, "[{}] {} (Source: {})", i + 1, r.text, r.source_file);
         }
     }
     prompt.push_str("<|eot_id|>");
@@ -144,7 +144,7 @@ pub fn assemble_prompt_qwen2(
     if !results.is_empty() {
         prompt.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
+            let _ = writeln!(prompt, "[{}] {} (Source: {})", i + 1, r.text, r.source_file);
         }
     }
     prompt.push_str("<|im_end|>\n");
@@ -197,7 +197,7 @@ pub fn assemble_prompt_gemma(
     if !results.is_empty() {
         prompt.push_str("\n\n---\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            let _ = write!(prompt, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
+            let _ = writeln!(prompt, "[{}] {} (Source: {})", i + 1, r.text, r.source_file);
         }
         prompt.push_str("---");
     }
@@ -271,7 +271,7 @@ pub fn assemble_prompt_mistral(
     if !results.is_empty() {
         system_with_context.push_str("\n\nContext from course materials:\n");
         for (i, r) in results.iter().enumerate() {
-            let _ = write!(system_with_context, "[{}] {} (Source: {})\n", i + 1, r.text, r.source_file);
+            let _ = writeln!(system_with_context, "[{}] {} (Source: {})", i + 1, r.text, r.source_file);
         }
     }
 

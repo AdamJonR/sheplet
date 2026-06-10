@@ -38,11 +38,10 @@ impl ProjectManifest {
 
     pub fn bump_version(&mut self) {
         let parts: Vec<&str> = self.version.split('.').collect();
-        if parts.len() == 3 {
-            if let Ok(patch) = parts[2].parse::<u32>() {
+        if parts.len() == 3
+            && let Ok(patch) = parts[2].parse::<u32>() {
                 self.version = format!("{}.{}.{}", parts[0], parts[1], patch + 1);
             }
-        }
     }
 }
 

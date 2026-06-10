@@ -220,7 +220,7 @@ impl LoraAttention {
             None => attn_weights,
             Some(mask) => attn_weights.broadcast_add(mask)?,
         };
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = model_utils::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights.matmul(&value_states)?;
 
         let attn_output = attn_output
@@ -269,8 +269,8 @@ impl Module for Mlp {
 struct DecoderLayer {
     self_attn: LoraAttention,
     mlp: Mlp,
-    input_layernorm: candle_nn::RmsNorm,
-    post_attention_layernorm: candle_nn::RmsNorm,
+    input_layernorm: model_utils::RmsNorm,
+    post_attention_layernorm: model_utils::RmsNorm,
 }
 
 impl DecoderLayer {
@@ -284,8 +284,8 @@ impl DecoderLayer {
         let self_attn =
             LoraAttention::new(rotary_emb, cfg, lora_cfg, vb.pp("self_attn"), device)?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm = candle_nn::rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = candle_nn::rms_norm(
+        let input_layernorm = model_utils::RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = model_utils::RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -326,7 +326,7 @@ impl DecoderLayer {
 pub struct LlamaLoraModel {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
-    norm: candle_nn::RmsNorm,
+    norm: model_utils::RmsNorm,
     lm_head: candle_nn::Linear,
     device: Device,
     dtype: DType,
@@ -357,7 +357,7 @@ impl LlamaLoraModel {
                 DecoderLayer::new(rotary_emb.clone(), cfg, lora_cfg, vb_l.pp(layer_idx), device)?;
             layers.push(layer);
         }
-        let norm = candle_nn::rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = model_utils::RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
 
         let lm_head = if cfg.tie_word_embeddings {
             candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)

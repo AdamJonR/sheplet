@@ -33,7 +33,7 @@ fn make_history(n: usize) -> Vec<Message> {
 
 fn prompt_assembly(c: &mut Criterion) {
     let system = "You are a helpful course tutor. Answer questions using only the provided context.";
-    let question = "What is the relationship between photosynthesis and cellular respiration?";
+    let question = "What is the relationship between the Roman Senate and the consuls?";
 
     let results_3 = make_results(3);
     let results_5 = make_results(5);

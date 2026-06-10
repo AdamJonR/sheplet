@@ -3,12 +3,12 @@ use std::path::Path;
 
 use crate::project::{require_init, project_dirs};
 
-const DPO_TEMPLATE: &str = r#"{"prompt": "What is photosynthesis?", "chosen": "Photosynthesis is the process by which green plants and some other organisms use sunlight to synthesize foods from carbon dioxide and water. It generally involves the green pigment chlorophyll and generates oxygen as a byproduct.", "rejected": "I think it has something to do with plants and light, maybe they eat the sun or something."}
-{"prompt": "Explain the water cycle.", "chosen": "The water cycle describes the continuous movement of water within the Earth and atmosphere. It involves evaporation from surface water, transpiration from plants, condensation into clouds, and precipitation back to the surface as rain or snow.", "rejected": "Water goes up and comes back down."}
+const DPO_TEMPLATE: &str = r#"{"prompt": "When was Rome traditionally founded?", "chosen": "Rome was traditionally founded in 753 BC, a date calculated by the Roman scholar Varro. According to legend, the city was established by Romulus, who became its first king, though archaeology shows settlements existed on the site from at least the 8th century BC.", "rejected": "I think Rome was founded sometime in the Middle Ages, maybe by some merchants or something."}
+{"prompt": "What does SPQR stand for?", "chosen": "SPQR stands for Senatus Populusque Romanus, meaning the Senate and the People of Rome. It appeared on official documents, monuments, and standards, symbolizing the shared authority of the governing council and the citizens.", "rejected": "It's some kind of Roman abbreviation."}
 "#;
 
-const SFT_TEMPLATE: &str = r#"{"input": "What is photosynthesis?", "output": "Photosynthesis is the process by which green plants and some other organisms use sunlight to synthesize foods from carbon dioxide and water. It generally involves the green pigment chlorophyll and generates oxygen as a byproduct."}
-{"input": "Explain the water cycle.", "output": "The water cycle describes the continuous movement of water within the Earth and atmosphere. It involves evaporation from surface water, transpiration from plants, condensation into clouds, and precipitation back to the surface as rain or snow."}
+const SFT_TEMPLATE: &str = r#"{"input": "When was Rome traditionally founded?", "output": "Rome was traditionally founded in 753 BC, a date calculated by the Roman scholar Varro. According to legend, the city was established by Romulus, who became its first king, though archaeology shows settlements existed on the site from at least the 8th century BC."}
+{"input": "What does SPQR stand for?", "output": "SPQR stands for Senatus Populusque Romanus, meaning the Senate and the People of Rome. It appeared on official documents, monuments, and standards, symbolizing the shared authority of the governing council and the citizens."}
 "#;
 
 pub fn run(project: &Path) -> Result<()> {

@@ -10,13 +10,14 @@ use crate::manifest::Manifest;
 /// trigger an unbounded allocation (zstd decompression bomb).
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
+/// A tar archive streaming from a zstd decoder over in-memory compressed bytes.
+type StreamingArchive<'a> = tar::Archive<zstd::stream::Decoder<'a, BufReader<Cursor<&'a [u8]>>>>;
+
 /// Create a streaming tar archive over zstd-compressed data.
 ///
 /// Each call produces a fresh decompression stream, allowing multiple
 /// sequential passes without materializing the full decompressed content.
-fn streaming_archive(
-    compressed_data: &[u8],
-) -> Result<tar::Archive<zstd::stream::Decoder<'_, BufReader<Cursor<&[u8]>>>>, BundleError> {
+fn streaming_archive(compressed_data: &[u8]) -> Result<StreamingArchive<'_>, BundleError> {
     let decoder = zstd::stream::Decoder::new(Cursor::new(compressed_data))?;
     Ok(tar::Archive::new(decoder))
 }
