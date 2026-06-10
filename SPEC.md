@@ -204,43 +204,43 @@ Sheplet uses Ed25519 asymmetric cryptography (`ed25519-dalek`) to sign bundles a
 
 ### Step 1 — Initialize a course project
 ```bash
-sheplet-instructor init --course "Introduction to Biology" --output ./bio101
+sheplet-instructor init --course "Ancient Rome" --output ./rome101
 ```
 Creates a scaffolded project directory. On first run ever, also generates the professor's Ed25519 keypair.
 
 ### Step 2 — Generate fine-tuning data templates
 ```bash
-sheplet-instructor templates --project ./bio101
+sheplet-instructor templates --project ./rome101
 ```
-Writes example JSONL template files to `./bio101/finetune_data/`:
+Writes example JSONL template files to `./rome101/finetune_data/`:
 - `dpo_template.jsonl` — annotated DPO examples with comments explaining the format
 - `sft_template.jsonl` — annotated SFT examples with comments explaining the format
 
 ### Step 3 — Ingest source documents
 ```bash
-sheplet-instructor ingest --sources ./sources/ --project ./bio101
+sheplet-instructor ingest --sources ./sources/ --project ./rome101
 ```
 - Recursively processes all supported files in the `sources/` directory
 - Supported formats: PDF, Word (.docx), Excel (.xlsx), CSV, plain text (.txt)
 - Chunks documents using `text-splitter` (semantic, 800–2000 characters, 10% overlap)
 - Embeds chunks using all-MiniLM-L6-v2 via Candle
-- Populates LanceDB vector database at `./bio101/database/`
+- Populates LanceDB vector database at `./rome101/database/`
 - Warns if PDF parsing quality appears degraded
 
 ### Step 4 — Download the model
 ```bash
-sheplet-instructor model --name phi-3-mini-4k-instruct --project ./bio101
+sheplet-instructor model --name phi-3-mini-4k-instruct --project ./rome101
 # or any supported model:
-sheplet-instructor model --name qwen2.5-1.5b-instruct --project ./bio101
+sheplet-instructor model --name qwen2.5-1.5b-instruct --project ./rome101
 ```
 - Downloads model SafeTensors from Hugging Face Hub via `hf-hub`
 - Gated models (Gemma, Llama) require `HF_TOKEN` environment variable
-- Saves weights to `./bio101/model/`
+- Saves weights to `./rome101/model/`
 
 ### Step 5 — Fine-tune with LoRA
 ```bash
-sheplet-instructor finetune --method dpo --data ./bio101/finetune_data/dpo.jsonl --project ./bio101
-sheplet-instructor finetune --method sft --data ./bio101/finetune_data/sft.jsonl --project ./bio101
+sheplet-instructor finetune --method dpo --data ./rome101/finetune_data/dpo.jsonl --project ./rome101
+sheplet-instructor finetune --method sft --data ./rome101/finetune_data/sft.jsonl --project ./rome101
 ```
 Pre-flight hardware warning displayed before training begins:
 ```
@@ -253,8 +253,8 @@ Proceed? [y/N]
 
 ### Step 6 — Configure course settings
 ```bash
-sheplet-instructor config --project ./bio101 \
-  --system-prompt "You are a helpful biology tutor. Answer only from the provided course materials." \
+sheplet-instructor config --project ./rome101 \
+  --system-prompt "You are a helpful ancient history tutor. Answer only from the provided course materials." \
   --retrieval top-k \
   --top-k 5 \
   --relevance-threshold 0.7
@@ -262,13 +262,13 @@ sheplet-instructor config --project ./bio101 \
 
 ### Step 7 — Package and sign the bundle
 ```bash
-sheplet-instructor bundle --project ./bio101 --output ./bio101_v1.sheplet
+sheplet-instructor bundle --project ./rome101 --output ./rome101_v1.sheplet
 ```
 - Compresses with `zstd`, signs with Ed25519, outputs `.sheplet` file
 
 ### Re-bundling for updates
 ```bash
-sheplet-instructor bundle --project ./bio101 --output ./bio101_v2.sheplet --bump-version
+sheplet-instructor bundle --project ./rome101 --output ./rome101_v2.sheplet --bump-version
 ```
 
 ---
@@ -442,7 +442,7 @@ sheplet-instructor
 
 ## 16. Project Directory Structure (Instructor Machine)
 ```
-bio101/
+rome101/
   manifest.json
   config.json
   sources/                  ← original source documents (not bundled)
@@ -457,7 +457,7 @@ bio101/
 ~/.sheplet-instructor/
   keypair.json              ← Ed25519 keypair (private key stays here)
 
-bio101_v1.sheplet           ← signed distributable bundle
+rome101_v1.sheplet           ← signed distributable bundle
 ```
 
 ---
@@ -467,7 +467,7 @@ bio101_v1.sheplet           ← signed distributable bundle
 sheplet-student/
   sheplet-student.exe
   courses/
-    bio101/
+    rome101/
       manifest.json
       model/
       embeddings/
@@ -477,7 +477,7 @@ sheplet-student/
     chem201/
       ...
   conversations/
-    bio101/                 ← sled conversation store
+    rome101/                 ← sled conversation store
     chem201/
 ```
 

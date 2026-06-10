@@ -85,7 +85,7 @@ echo "--- Build completed in ${TIME_BUILD}s ---"
 echo ""
 echo "=== Init ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" init --course "Basic Biology" --output "$TEST_DIR"
+"$INSTRUCTOR" init --course "Ancient Rome" --output "$TEST_DIR"
 TIME_INIT=$(( SECONDS - STEP_START ))
 echo "--- Init completed in ${TIME_INIT}s ---"
 
@@ -93,261 +93,211 @@ echo "--- Init completed in ${TIME_INIT}s ---"
 
 mkdir -p "$TEST_DIR/sources"
 
-cat > "$TEST_DIR/sources/cell_biology.txt" << 'CELL_EOF'
-Introduction to Cell Biology
+cat > "$TEST_DIR/sources/roman_founding.txt" << 'FOUNDING_EOF'
+The Founding and Geography of Rome
 
-The cell is the basic structural and functional unit of all living organisms. Cell theory,
-one of the fundamental principles of biology, states three key ideas: all living organisms
-are composed of one or more cells, the cell is the basic unit of life, and all cells arise
-from pre-existing cells. This theory was developed through the contributions of scientists
-such as Matthias Schleiden, Theodor Schwann, and Rudolf Virchow in the 19th century.
+Rome was traditionally founded in 753 BC, a date calculated by the Roman scholar Marcus
+Terentius Varro. According to legend, the city was established by Romulus, who became its
+first king and gave the city its name. While the founding legend is mythological, archaeology
+confirms that permanent settlements existed on the site from at least the 8th century BC.
 
-Cells are broadly classified into two types: prokaryotic and eukaryotic. Prokaryotic cells,
-found in bacteria and archaea, lack a membrane-bound nucleus and other membrane-bound
-organelles. Eukaryotic cells, found in animals, plants, fungi, and protists, contain a
-well-defined nucleus enclosed by a nuclear envelope, along with various specialized organelles.
+The city of Rome was built on seven hills overlooking the Tiber River in west-central Italy.
+The seven hills are the Palatine, Capitoline, Aventine, Caelian, Esquiline, Viminal, and
+Quirinal. The Palatine Hill, where the earliest settlement is thought to have begun, later
+became the location of imperial residences. The Capitoline Hill held the most important
+temples, including the Temple of Jupiter Optimus Maximus, and served as the religious and
+political heart of the city.
 
-Key organelles in eukaryotic cells include:
+The Tiber River was central to Rome's growth. It provided fresh water, a route for trade,
+and a natural defensive barrier. Rome's location about 25 kilometers inland gave it access
+to the sea through the river while keeping it protected from coastal raids. A river island,
+the Tiber Island, provided the easiest crossing point and became an early focus of settlement.
 
-The nucleus serves as the control center of the cell, housing the cell's DNA organized into
-chromosomes. The nuclear envelope is a double membrane with nuclear pores that regulate the
-transport of molecules between the nucleus and the cytoplasm.
+Roman history is conventionally divided into three periods. The Roman Kingdom (753–509 BC)
+was ruled by a series of kings, traditionally numbered as seven. The Roman Republic (509–27
+BC) replaced the monarchy with elected officials and a Senate. The Roman Empire (27 BC
+onward) began when Augustus became the first emperor, concentrating authority in a single
+ruler while preserving many republican institutions in name.
 
-Mitochondria are the powerhouses of the cell, responsible for cellular respiration and ATP
-production. They have a double membrane structure with an inner membrane folded into cristae,
-which increases the surface area for the electron transport chain. Mitochondria contain their
-own DNA, supporting the endosymbiotic theory.
+The boundary of the original city was marked by a sacred line called the pomerium. Within
+the pomerium, certain activities were restricted by religious custom. As Rome grew, the
+pomerium was extended several times, reflecting the expansion of the city beyond its
+original walls.
 
-The endoplasmic reticulum (ER) comes in two forms: rough ER, studded with ribosomes and
-involved in protein synthesis and modification, and smooth ER, which lacks ribosomes and is
-involved in lipid synthesis, detoxification, and calcium storage.
+The Italian peninsula provided Rome with fertile farmland, especially the plains of Latium
+where Rome sat and the rich region of Campania to the south. The Apennine Mountains form the
+peninsula's spine, and the surrounding Mediterranean Sea connected Italy to trade networks
+across three continents. These geographic advantages supported a growing population and a
+stable agricultural base.
 
-The Golgi apparatus processes, packages, and ships proteins and lipids received from the ER.
-It consists of stacked membrane-bound sacs called cisternae. Proteins move through the cis,
-medial, and trans compartments before being sorted and shipped to their final destinations.
+Latium was home to the Latins, the people from whom Rome emerged, and their language, Latin,
+became the language of Rome. Neighboring peoples included the Etruscans to the north, whose
+culture strongly influenced early Rome, and various Italic peoples throughout the peninsula.
+The Etruscans contributed engineering knowledge, religious practices, and even some of Rome's
+early symbols of authority.
 
-The cell membrane (plasma membrane) is a phospholipid bilayer embedded with proteins. It
-follows the fluid mosaic model, where the membrane is fluid and proteins float within it.
-The membrane is selectively permeable, controlling the passage of substances into and out
-of the cell.
+The Romans measured their calendar from the supposed founding of the city, using the phrase
+"ab urbe condita," meaning "from the founding of the city." This dating system placed year
+one at 753 BC, so events were sometimes recorded as occurring a given number of years after
+the city's founding.
+FOUNDING_EOF
 
-Osmosis is the movement of water molecules across a selectively permeable membrane from an
-area of lower solute concentration to an area of higher solute concentration. In a hypotonic
-solution, water moves into the cell, potentially causing it to swell and burst (lysis). In a
-hypertonic solution, water moves out of the cell, causing it to shrink (crenation). In an
-isotonic solution, there is no net movement of water.
+cat > "$TEST_DIR/sources/roman_government.txt" << 'GOVERNMENT_EOF'
+Government of the Roman Republic
 
-Lysosomes are membrane-bound organelles containing digestive enzymes that break down waste
-materials, cellular debris, and foreign invaders. They maintain an acidic internal pH of
-about 4.5-5.0, which is optimal for their hydrolytic enzymes.
+The Roman Republic was established in 509 BC, when the Romans replaced their monarchy with a
+system of elected officials and representative bodies. The word "republic" comes from the
+Latin "res publica," meaning "public affair" or "the public thing," reflecting the idea that
+the state belonged to its citizens rather than to a king.
 
-The cytoskeleton is a network of protein filaments that provides structural support, aids in
-cell movement, and plays a role in intracellular transport. It consists of three main types
-of filaments: microfilaments (actin filaments), intermediate filaments, and microtubules.
-Microfilaments are the thinnest, made of actin, and are involved in muscle contraction, cell
-division, and cell shape. Microtubules are the thickest, made of tubulin, and form the
-mitotic spindle during cell division, as well as the structural core of cilia and flagella.
+The Senate was the most prestigious institution of the Republic. It was a council of
+experienced statesmen, originally drawn from leading families, who advised the magistrates
+and guided policy on finance, foreign relations, and religion. Although the Senate's formal
+power was advisory, its authority and continuity made it the dominant force in Roman politics.
+Its decrees were called senatus consulta.
 
-Cell division occurs through two main processes: mitosis and meiosis. Mitosis produces two
-genetically identical daughter cells and is used for growth and repair. It consists of
-prophase, metaphase, anaphase, and telophase, followed by cytokinesis. During prophase,
-chromatin condenses into visible chromosomes and the mitotic spindle begins to form. In
-metaphase, chromosomes align at the cell's equator. During anaphase, sister chromatids
-separate and move to opposite poles. In telophase, nuclear envelopes reform around each set
-of chromosomes.
+Executive authority was held by two consuls, elected annually. Having two consuls who could
+each veto the other prevented any single person from holding too much power, and the one-year
+term ensured regular turnover. The consuls led the government, proposed laws, and presided
+over the most important public business. After their year in office, former consuls often
+continued to serve the state in other roles.
 
-Meiosis is a specialized form of cell division that produces four genetically unique haploid
-cells (gametes). It involves two rounds of division: meiosis I (reductional division) and
-meiosis II (equational division). Crossing over occurs during prophase I, where homologous
-chromosomes exchange genetic material, increasing genetic diversity. This is a key source
-of genetic variation in sexually reproducing organisms.
+Roman officials advanced through a sequence of offices known as the cursus honorum, or
+"course of honors." The typical sequence began with the quaestor, who managed financial
+affairs, followed by the aedile, responsible for public buildings, games, and the grain
+supply. Next came the praetor, who administered justice, and finally the consul, the highest
+regular office. Each step required a minimum age and prior experience, ensuring that leaders
+were tested before reaching the top.
 
-Active transport requires energy (ATP) to move substances against their concentration
-gradient. The sodium-potassium pump (Na+/K+ ATPase) is a well-known example, pumping 3
-sodium ions out of the cell and 2 potassium ions into the cell per ATP molecule hydrolyzed.
-This pump is essential for maintaining the cell's resting membrane potential and is critical
-for nerve impulse transmission.
-CELL_EOF
+The tribunes of the plebs were officials created to protect the interests of the common
+citizens, known as plebeians. Tribunes could veto actions of magistrates and the Senate that
+they judged harmful to the people, and their persons were legally protected. This office gave
+ordinary citizens a formal voice in government and served as a check on the power of the
+aristocracy.
 
-cat > "$TEST_DIR/sources/genetics_basics.txt" << 'GENETICS_EOF'
-Fundamentals of Genetics
+Roman society was historically divided between patricians, the established noble families,
+and plebeians, the broader body of common citizens. Over the early Republic, plebeians
+gradually gained political rights through a long process of reform, eventually winning access
+to the highest offices and a share in lawmaking.
 
-Genetics is the branch of biology that studies genes, heredity, and genetic variation in
-living organisms. The field began with the work of Gregor Mendel, an Augustinian friar who
-conducted breeding experiments with pea plants in the mid-1800s.
+The Twelve Tables, written around 451 BC, were Rome's first written code of law. Before this,
+legal customs were known mainly to the priests and aristocrats, which left ordinary citizens
+at a disadvantage. By inscribing the laws on twelve bronze tablets displayed in public, Rome
+made the rules known to everyone. The Twelve Tables became the foundation of Roman law, a
+tradition that influenced legal systems for centuries afterward.
 
-DNA (deoxyribonucleic acid) is the hereditary material in nearly all organisms. It has a
-double helix structure, discovered by James Watson and Francis Crick in 1953, with
-contributions from Rosalind Franklin's X-ray crystallography data. DNA consists of two
-complementary strands made of nucleotides, each containing a sugar (deoxyribose), a phosphate
-group, and one of four nitrogenous bases: adenine (A), thymine (T), guanine (G), and cytosine
-(C). Base pairing rules dictate that A pairs with T and G pairs with C.
+The Romans expressed the partnership between the people and their governing council with the
+abbreviation SPQR, standing for "Senatus Populusque Romanus," meaning "the Senate and the
+People of Rome." This phrase appeared on official documents, public monuments, and the
+standards carried by Roman institutions, symbolizing the shared authority of the state.
 
-Chromosomes are structures made of DNA tightly coiled around histone proteins. Humans have
-46 chromosomes arranged in 23 pairs — 22 pairs of autosomes and one pair of sex chromosomes
-(XX in females, XY in males). Each chromosome contains many genes, which are specific
-segments of DNA that code for proteins.
+The Republic's system of balanced offices, term limits, and overlapping powers was admired by
+later thinkers as an early example of separated and checked authority. The Greek historian
+Polybius, who lived in Rome during the 2nd century BC, described the Roman constitution as a
+mixture of monarchy, aristocracy, and democracy, each element restraining the others.
+GOVERNMENT_EOF
 
-Mendel's Laws of Inheritance:
+cat > "$TEST_DIR/sources/roman_engineering.txt" << 'ENGINEERING_EOF'
+Roman Engineering and Infrastructure
 
-The Law of Segregation states that during gamete formation, the two alleles for each gene
-separate (segregate) so that each gamete carries only one allele for each trait. This occurs
-during meiosis I when homologous chromosomes are separated.
+The Romans were among the most accomplished engineers of the ancient world. Their roads,
+aqueducts, bridges, and public works were built to last, and many survive today. Roman
+engineering combined practical experience with standardized techniques that could be applied
+consistently across a vast territory.
 
-The Law of Independent Assortment states that genes located on different chromosomes are
-inherited independently of each other. During meiosis, the orientation of each pair of
-homologous chromosomes is random, leading to various combinations of maternal and paternal
-chromosomes in the gametes.
+Roman roads were famous for their durability and straightness. The first great road, the
+Appian Way (Via Appia), was begun in 312 BC and connected Rome to the south of Italy. Roads
+were built in layers: a foundation of large stones, followed by gravel and sand, topped with
+fitted paving stones that shed rainwater. Roads were slightly raised in the center, or
+cambered, so water drained to ditches on either side. The saying "all roads lead to Rome"
+reflects how the network radiated outward from the capital.
 
-The Law of Dominance states that in a heterozygous organism, only the dominant allele is
-expressed in the phenotype, while the recessive allele is masked. A dominant allele is
-typically represented by an uppercase letter (e.g., B) and a recessive allele by a lowercase
-letter (e.g., b).
+Distances along Roman roads were marked by milestones, stone columns set at regular
+intervals. A Roman mile was one thousand paces, and the Latin "mille passuum," meaning "a
+thousand paces," is the origin of the English word "mile." A gilded monument in Rome called
+the Milliarium Aureum, or Golden Milestone, was regarded as the point from which all
+distances in the empire were measured.
 
-An allele is one of the variant forms of a gene at a particular locus on a chromosome.
-Organisms that have two identical alleles for a gene are homozygous (e.g., BB or bb), while
-organisms with two different alleles are heterozygous (e.g., Bb). The genotype refers to
-the genetic makeup of an organism, while the phenotype is the observable physical
-characteristic resulting from the genotype.
+Aqueducts carried fresh water into cities from distant springs and rivers. They worked
+entirely by gravity: the channel sloped gently downhill for the whole of its length, often
+many kilometers, so the water flowed steadily without any pump. Engineers maintained a
+precise, gradual gradient, and where valleys interrupted the route, they carried the channel
+across on rows of arches. The Pont du Gard in southern France is a surviving aqueduct bridge
+that crosses a river valley on three tiers of stone arches.
 
-RNA (ribonucleic acid) differs from DNA in several ways: it is typically single-stranded,
-uses ribose sugar instead of deoxyribose, and contains uracil (U) instead of thymine (T).
-The three main types of RNA are messenger RNA (mRNA), which carries the genetic code from DNA
-to ribosomes; transfer RNA (tRNA), which brings amino acids to the ribosome during translation;
-and ribosomal RNA (rRNA), which makes up part of the ribosome structure.
+Roman concrete, called opus caementicium, was one of Rome's most important innovations. It
+was made by mixing lime, water, and a volcanic ash called pozzolana with pieces of stone or
+brick. This mixture set into a hard, durable mass and could even harden underwater, which
+made it ideal for harbors, foundations, and large vaulted structures. Roman concrete allowed
+builders to create spaces and spans that earlier stone construction could not achieve.
 
-Protein synthesis occurs in two main stages: transcription (DNA to mRNA in the nucleus) and
-translation (mRNA to protein at the ribosome). During transcription, RNA polymerase reads the
-template strand of DNA and synthesizes a complementary mRNA strand. During translation,
-ribosomes read the mRNA codons (three-nucleotide sequences) and tRNA molecules deliver the
-corresponding amino acids to build a polypeptide chain.
+The arch was central to Roman building. An arch carries weight by directing the load outward
+and downward along a curve of wedge-shaped stones called voussoirs. The central stone at the
+top, the keystone, locks the others in place. Because the arch is strong in compression, it
+let the Romans bridge wide openings and stack tiers of arches to great heights. Repeating an
+arch in a line produces a vault, and rotating it produces a dome.
 
-Mutations are changes in the DNA sequence that can occur spontaneously or be induced by
-mutagens. Point mutations affect a single nucleotide, while chromosomal mutations affect
-larger segments of DNA. Mutations can be silent (no effect), missense (different amino acid),
-or nonsense (premature stop codon).
+Roman cities were served by sewers and drainage systems. The Cloaca Maxima, or Great Sewer,
+was one of the earliest large sewer systems, originally built to drain marshy ground near the
+Forum and later used to carry waste water to the Tiber. Clean water from aqueducts supplied
+public fountains, baths, and latrines, and the used water helped flush the drains.
 
-Epigenetics refers to heritable changes in gene expression that do not involve changes to the
-DNA sequence itself. Key epigenetic mechanisms include DNA methylation, where methyl groups are
-added to cytosine bases (often at CpG dinucleotides), typically silencing gene expression.
-Histone modification is another mechanism, where chemical groups (acetyl, methyl, phosphate)
-are added to histone tails, altering chromatin structure and gene accessibility. Acetylation
-generally promotes gene expression by loosening chromatin, while methylation can either
-activate or repress genes depending on the specific residue modified.
+To lay out their works accurately, Roman surveyors used an instrument called the groma, a
+cross of horizontal arms with hanging weights that allowed them to sight straight lines and
+right angles. With simple tools like the groma and careful measurement, Roman engineers
+achieved the precise alignments their roads and aqueducts required.
+ENGINEERING_EOF
 
-Genetic linkage occurs when genes are located close together on the same chromosome and tend
-to be inherited together. The frequency of recombination between linked genes depends on
-their physical distance on the chromosome, measured in centimorgans (cM). Thomas Hunt Morgan
-demonstrated linkage using Drosophila (fruit flies), showing that some traits did not assort
-independently as predicted by Mendel's second law.
+cat > "$TEST_DIR/sources/roman_architecture.txt" << 'ARCHITECTURE_EOF'
+Roman Architecture and Public Buildings
 
-Polymerase chain reaction (PCR) is a laboratory technique used to amplify specific DNA
-sequences. It involves repeated cycles of denaturation (separating DNA strands at ~95°C),
-annealing (primers binding at ~55-65°C), and extension (DNA polymerase synthesizing new
-strands at ~72°C). PCR can produce millions of copies of a target sequence from a tiny
-amount of starting material and is widely used in diagnostics, forensics, and research.
-GENETICS_EOF
+Roman architecture combined ideas borrowed from earlier cultures, especially the Greeks and
+Etruscans, with Rome's own innovations in concrete and the arch. The result was a style
+capable of enclosing vast interior spaces and serving large urban populations. Roman public
+buildings were designed to impress as well as to function.
 
-cat > "$TEST_DIR/sources/ecology_basics.txt" << 'ECOLOGY_EOF'
-Fundamentals of Ecology
+The Pantheon in Rome is one of the best-preserved buildings of the ancient world. Rebuilt
+under the emperor Hadrian around 126 AD, it is famous for its enormous concrete dome. At the
+center of the dome is a circular opening called the oculus, which is open to the sky and lets
+in light. The Pantheon's dome was the largest of its kind for many centuries, and its
+interior height and diameter are nearly equal, forming the shape of a perfect sphere resting
+within the building.
 
-Ecology is the scientific study of the interactions between organisms and their environment.
-It encompasses the study of individuals, populations, communities, ecosystems, and the
-biosphere. The term was coined by Ernst Haeckel in 1866, derived from the Greek words
-"oikos" (house) and "logos" (study).
+The Colosseum, formally the Flavian Amphitheatre, was completed around 80 AD. It was an oval
+arena used for public spectacles and games that the city provided as free entertainment. Built
+of stone and concrete, it used a system of arches and vaults to support tiered seating for
+tens of thousands of spectators. A network of passages and stairways, called vomitoria,
+allowed the large crowds to enter and leave quickly. The exterior arcade displayed the
+classical column styles stacked in tiers.
 
-A population is a group of individuals of the same species living in a particular area at a
-given time. Population ecology studies factors that affect population size and growth,
-including birth rates, death rates, immigration, and emigration. Population growth can follow
-two main models: exponential growth (J-shaped curve) occurs when resources are unlimited,
-described by dN/dt = rN, where r is the intrinsic rate of increase. Logistic growth (S-shaped
-curve) occurs when resources are limited, described by dN/dt = rN(1 - N/K), where K is the
-carrying capacity of the environment.
+The Roman Forum was the civic center of the city. It was an open public square surrounded by
+government buildings, temples, and monuments, where citizens gathered for elections, public
+speeches, legal proceedings, and commerce. As Rome grew, later emperors added additional
+forums nearby, but the original Forum remained the symbolic heart of public life.
 
-A community consists of all the populations of different species living and interacting in a
-particular area. Species interactions include competition (both interspecific and
-intraspecific), predation, mutualism, commensalism, and parasitism. The competitive exclusion
-principle (Gause's principle) states that two species competing for the same limited resource
-cannot coexist indefinitely — one will outcompete the other.
+The basilica was a large rectangular hall used for public business and law courts. It
+typically had a high central aisle, called a nave, flanked by lower side aisles separated by
+rows of columns, with light entering through upper windows. The basilica form was practical
+for sheltering large gatherings, and its design was later adapted for places of worship.
 
-An ecosystem includes all the living organisms (biotic factors) and non-living components
-(abiotic factors) in a given area, along with their interactions. Energy flows through
-ecosystems in one direction: from the sun to producers (autotrophs) to consumers
-(heterotrophs) to decomposers. Only about 10% of energy is transferred from one trophic
-level to the next (the 10% rule), with the rest lost as heat through cellular respiration.
+Classical architecture used standardized column styles called orders. The Greeks developed
+three: the Doric order, plain and sturdy with a simple capital; the Ionic order, more slender
+and marked by scroll-shaped volutes at the top; and the Corinthian order, the most ornate,
+decorated with carved acanthus leaves. The Romans adopted all three and added two of their
+own: the Tuscan order, a simplified version of the Doric, and the Composite order, which
+combined Ionic volutes with Corinthian leaves.
 
-Biogeochemical cycles describe the movement of chemical elements through the biotic and
-abiotic components of ecosystems. The carbon cycle involves photosynthesis (removing CO2 from
-the atmosphere), cellular respiration (releasing CO2), decomposition, and combustion of fossil
-fuels. The nitrogen cycle includes nitrogen fixation (converting N2 to NH3 by bacteria),
-nitrification (NH3 to NO3-), assimilation by plants, and denitrification (NO3- back to N2).
+Roman builders worked in a range of materials. Travertine, a local limestone, was widely used
+for its strength and pale color. Marble, prized for fine surfaces and decoration, was quarried
+in Italy and imported from across the Mediterranean. Brick and concrete formed the structural
+core of many buildings, often faced with stone or marble so that a sturdy concrete structure
+could present an elegant exterior.
 
-Ecological succession is the process of change in the species structure of an ecological
-community over time. Primary succession occurs on bare surfaces where no soil exists (e.g.,
-after a volcanic eruption), beginning with pioneer species like lichens. Secondary succession
-occurs in areas where a community has been disturbed but soil remains (e.g., after a fire).
-Both types progress toward a climax community, a relatively stable end stage.
-
-Biodiversity refers to the variety of life at all levels — genetic diversity within species,
-species diversity within communities, and ecosystem diversity across landscapes. Biodiversity
-is critical for ecosystem stability and resilience. Threats to biodiversity include habitat
-destruction, invasive species, pollution, overexploitation, and climate change (collectively
-known by the acronym HIPPO).
-ECOLOGY_EOF
-
-cat > "$TEST_DIR/sources/evolution_basics.txt" << 'EVOLUTION_EOF'
-Fundamentals of Evolution
-
-Evolution is the change in the inherited characteristics of biological populations over
-successive generations. Charles Darwin and Alfred Russel Wallace independently developed the
-theory of evolution by natural selection, which Darwin published in "On the Origin of Species"
-in 1859.
-
-Natural selection is the primary mechanism of evolution. It requires four conditions:
-variation (individuals in a population differ in their traits), heritability (some of that
-variation is genetic and can be passed to offspring), differential reproduction (individuals
-with certain traits produce more offspring), and adaptation (over generations, favorable
-traits become more common in the population). Natural selection acts on phenotypes, but
-evolution occurs through changes in allele frequencies in the gene pool.
-
-The Hardy-Weinberg principle describes the conditions under which allele frequencies in a
-population remain constant across generations. The equation p² + 2pq + q² = 1 predicts
-genotype frequencies, where p and q are the frequencies of two alleles. The five conditions
-for Hardy-Weinberg equilibrium are: no mutation, random mating, no natural selection, large
-population size (no genetic drift), and no gene flow. Any deviation from these conditions
-causes evolution.
-
-Genetic drift is the random change in allele frequencies due to chance events, especially
-significant in small populations. Two special cases are the bottleneck effect (a drastic
-reduction in population size due to a catastrophic event) and the founder effect (a small
-group establishes a new population with different allele frequencies than the original).
-
-Speciation is the formation of new species. Allopatric speciation occurs when populations
-are geographically separated by a physical barrier (e.g., a mountain range or river),
-preventing gene flow. Over time, the isolated populations diverge genetically and may become
-reproductively isolated. Sympatric speciation occurs without geographic separation, often
-through polyploidy (common in plants) or ecological specialization.
-
-Evidence for evolution comes from multiple sources: the fossil record shows transitional
-forms and patterns of change over time; comparative anatomy reveals homologous structures
-(similar structures in different species due to common ancestry, e.g., the pentadactyl limb)
-and analogous structures (similar function but different origin, e.g., bird and insect wings);
-molecular biology shows that all life shares the same genetic code (DNA/RNA) and that more
-closely related species have more similar DNA sequences; biogeography shows that species
-distribution patterns reflect evolutionary history.
-
-Phylogenetics is the study of evolutionary relationships among organisms. Phylogenetic trees
-(cladograms) are diagrams that show the inferred evolutionary relationships based on shared
-derived characteristics (synapomorphies). Molecular phylogenetics uses DNA or protein sequence
-comparisons to reconstruct evolutionary history, often using the molecular clock hypothesis,
-which assumes that genetic mutations accumulate at a roughly constant rate over time.
-
-Coevolution occurs when two or more species reciprocally affect each other's evolution.
-Examples include predator-prey arms races (e.g., rough-skinned newts producing increasingly
-potent tetrodotoxin and garter snakes evolving resistance), plant-pollinator relationships
-(e.g., flowers evolving shapes and colors that attract specific pollinators), and host-parasite
-interactions. Coevolution can drive rapid diversification and specialization.
-EVOLUTION_EOF
+Many Roman cities followed a planned grid layout adapted from earlier traditions. Two main
+streets crossed at right angles: the cardo running north to south and the decumanus running
+east to west. Their intersection often marked the location of the forum and the main public
+buildings, giving Roman towns an orderly and recognizable plan wherever they were founded.
+ARCHITECTURE_EOF
 
 echo "Created test documents in $TEST_DIR/sources/"
 
@@ -377,26 +327,26 @@ if [ "$LORA" = "yes" ]; then
 
 # --- SFT training data (input/output pairs from source documents) ---
 cat > "$TEST_DIR/sft_data.jsonl" << 'SFT_EOF'
-{"input":"What is the basic unit of life?","output":"The cell is the basic structural and functional unit of all living organisms. Cell theory states that all living organisms are composed of one or more cells, the cell is the basic unit of life, and all cells arise from pre-existing cells."}
-{"input":"What are the two main types of cells?","output":"Cells are broadly classified into prokaryotic and eukaryotic. Prokaryotic cells, found in bacteria and archaea, lack a membrane-bound nucleus. Eukaryotic cells, found in animals, plants, fungi, and protists, contain a well-defined nucleus and specialized organelles."}
-{"input":"What is the function of mitochondria?","output":"Mitochondria are the powerhouses of the cell, responsible for cellular respiration and ATP production. They have a double membrane structure with an inner membrane folded into cristae, which increases surface area for the electron transport chain."}
-{"input":"Describe the structure of DNA.","output":"DNA has a double helix structure consisting of two complementary strands of nucleotides. Each nucleotide contains a deoxyribose sugar, a phosphate group, and one of four nitrogenous bases: adenine (A), thymine (T), guanine (G), and cytosine (C). A pairs with T and G pairs with C."}
-{"input":"What is Mendel's Law of Segregation?","output":"The Law of Segregation states that during gamete formation, the two alleles for each gene separate so that each gamete carries only one allele for each trait. This occurs during meiosis I when homologous chromosomes are separated."}
-{"input":"What is osmosis?","output":"Osmosis is the movement of water molecules across a selectively permeable membrane from an area of lower solute concentration to an area of higher solute concentration."}
-{"input":"What is the role of the Golgi apparatus?","output":"The Golgi apparatus processes, packages, and ships proteins and lipids received from the endoplasmic reticulum. It consists of stacked membrane-bound sacs called cisternae."}
-{"input":"How many chromosomes do humans have?","output":"Humans have 46 chromosomes arranged in 23 pairs — 22 pairs of autosomes and one pair of sex chromosomes (XX in females, XY in males). Each chromosome contains many genes that code for proteins."}
-{"input":"What is the difference between DNA and RNA?","output":"RNA differs from DNA in several ways: it is typically single-stranded, uses ribose sugar instead of deoxyribose, and contains uracil (U) instead of thymine (T). The three main types are mRNA, tRNA, and rRNA."}
-{"input":"What happens during transcription?","output":"During transcription, RNA polymerase reads the template strand of DNA and synthesizes a complementary mRNA strand. This occurs in the nucleus and is the first stage of protein synthesis."}
-{"input":"What is natural selection?","output":"Natural selection requires variation, heritability, differential reproduction, and adaptation. Individuals with favorable traits produce more offspring, and over generations those traits become more common in the population."}
-{"input":"What is the Hardy-Weinberg principle?","output":"The Hardy-Weinberg principle describes conditions under which allele frequencies remain constant: no mutation, random mating, no selection, large population, and no gene flow. The equation p² + 2pq + q² = 1 predicts genotype frequencies."}
-{"input":"How does energy flow through ecosystems?","output":"Energy flows through ecosystems in one direction: from the sun to producers to consumers to decomposers. Only about 10% of energy is transferred from one trophic level to the next, with the rest lost as heat."}
-{"input":"What is ecological succession?","output":"Ecological succession is the process of change in community species structure over time. Primary succession occurs on bare surfaces starting with pioneer species. Secondary succession occurs where soil remains. Both progress toward a climax community."}
-{"input":"What is epigenetics?","output":"Epigenetics refers to heritable changes in gene expression that do not involve changes to the DNA sequence. Key mechanisms include DNA methylation and histone modification, which alter chromatin structure and gene accessibility."}
-{"input":"What are the stages of mitosis?","output":"Mitosis consists of prophase (chromatin condenses, spindle forms), metaphase (chromosomes align at equator), anaphase (sister chromatids separate), and telophase (nuclear envelopes reform), followed by cytokinesis."}
-{"input":"How does meiosis differ from mitosis?","output":"Meiosis produces four genetically unique haploid cells through two rounds of division, while mitosis produces two genetically identical diploid cells. Crossing over during prophase I increases genetic diversity."}
-{"input":"What is active transport?","output":"Active transport requires energy (ATP) to move substances against their concentration gradient. The sodium-potassium pump pumps 3 Na+ ions out and 2 K+ ions in per ATP molecule."}
-{"input":"What is a population in ecology?","output":"A population is a group of individuals of the same species living in a particular area. Growth follows exponential (unlimited resources) or logistic (limited resources, carrying capacity K) models."}
-{"input":"What is genetic drift?","output":"Genetic drift is the random change in allele frequencies due to chance, especially significant in small populations. Special cases include the bottleneck effect and the founder effect."}
+{"input":"When was Rome traditionally founded?","output":"Rome was traditionally founded in 753 BC, a date calculated by the Roman scholar Varro. According to legend the city was established by Romulus, who became its first king, though archaeology shows permanent settlements existed on the site from at least the 8th century BC."}
+{"input":"On how many hills was the city of Rome built?","output":"Rome was built on seven hills overlooking the Tiber River: the Palatine, Capitoline, Aventine, Caelian, Esquiline, Viminal, and Quirinal. The Palatine is where the earliest settlement is thought to have begun, and the Capitoline held the city's most important temples."}
+{"input":"What are the three periods of Roman history?","output":"Roman history is divided into three periods: the Roman Kingdom (753–509 BC), ruled by kings; the Roman Republic (509–27 BC), governed by elected officials and a Senate; and the Roman Empire (27 BC onward), which began when Augustus became the first emperor."}
+{"input":"Why was the Tiber River important to Rome?","output":"The Tiber River provided fresh water, a route for trade, and a natural defensive barrier. Rome's location about 25 kilometers inland gave it access to the sea through the river while keeping it protected from coastal raids, and the Tiber Island offered the easiest crossing point."}
+{"input":"When was the Roman Republic established?","output":"The Roman Republic was established in 509 BC, when the Romans replaced their monarchy with a system of elected officials and representative bodies. The word republic comes from the Latin res publica, meaning the public affair, reflecting the idea that the state belonged to its citizens."}
+{"input":"What was the Roman Senate?","output":"The Senate was the most prestigious institution of the Republic, a council of experienced statesmen who advised the magistrates and guided policy on finance, foreign relations, and religion. Although its formal power was advisory, its authority and continuity made it the dominant force in Roman politics."}
+{"input":"How many consuls led the Roman Republic, and why?","output":"The Republic was led by two consuls, elected annually. Having two consuls who could each veto the other prevented any single person from holding too much power, and the one-year term ensured regular turnover in leadership."}
+{"input":"What was the cursus honorum?","output":"The cursus honorum, or course of honors, was the sequence of offices a Roman official advanced through. It began with the quaestor, who managed finances, then the aedile, responsible for public buildings and games, then the praetor, who administered justice, and finally the consul, the highest regular office."}
+{"input":"What were the Twelve Tables?","output":"The Twelve Tables, written around 451 BC, were Rome's first written code of law. By inscribing the laws on twelve bronze tablets displayed in public, Rome made the rules known to everyone rather than only to priests and aristocrats. They became the foundation of Roman law."}
+{"input":"What does SPQR stand for?","output":"SPQR stands for Senatus Populusque Romanus, meaning the Senate and the People of Rome. It appeared on official documents, public monuments, and standards, symbolizing the shared authority of the governing council and the citizens."}
+{"input":"What were the tribunes of the plebs?","output":"The tribunes of the plebs were officials created to protect the interests of the common citizens, the plebeians. They could veto actions of magistrates and the Senate that they judged harmful to the people, and their persons were legally protected, giving ordinary citizens a formal voice in government."}
+{"input":"What was the first major Roman road?","output":"The first great Roman road was the Appian Way (Via Appia), begun in 312 BC, which connected Rome to the south of Italy. Roman roads were built in layers of stone, gravel, and fitted paving, and were cambered in the center so rainwater drained to ditches on either side."}
+{"input":"How did Roman aqueducts move water?","output":"Roman aqueducts worked entirely by gravity. The channel sloped gently downhill for its whole length, often many kilometers, so water flowed steadily without any pump. Where valleys interrupted the route, engineers carried the channel across on rows of stone arches, as at the Pont du Gard."}
+{"input":"What was Roman concrete made of?","output":"Roman concrete, called opus caementicium, was made by mixing lime, water, and a volcanic ash called pozzolana with pieces of stone or brick. It set into a hard, durable mass and could even harden underwater, making it ideal for harbors, foundations, and large vaulted structures."}
+{"input":"How does a Roman arch carry weight?","output":"An arch carries weight by directing the load outward and downward along a curve of wedge-shaped stones called voussoirs. The central stone at the top, the keystone, locks the others in place. Because the arch is strong in compression, it let the Romans bridge wide openings and build to great heights."}
+{"input":"What is the Pantheon known for?","output":"The Pantheon in Rome, rebuilt under Hadrian around 126 AD, is famous for its enormous concrete dome. At the center of the dome is a circular opening called the oculus, open to the sky. Its interior height and diameter are nearly equal, forming the shape of a sphere resting within the building."}
+{"input":"What was the Colosseum?","output":"The Colosseum, formally the Flavian Amphitheatre, was completed around 80 AD. It was an oval arena used for public spectacles, built of stone and concrete with a system of arches and vaults supporting tiered seating for tens of thousands of spectators."}
+{"input":"What was the Roman Forum?","output":"The Roman Forum was the civic center of the city, an open public square surrounded by government buildings, temples, and monuments. Citizens gathered there for elections, public speeches, legal proceedings, and commerce, and it remained the symbolic heart of public life."}
+{"input":"What are the three classical orders of columns?","output":"The three Greek classical orders are the Doric, plain and sturdy with a simple capital; the Ionic, more slender with scroll-shaped volutes; and the Corinthian, the most ornate, decorated with carved acanthus leaves. The Romans adopted all three and added the Tuscan and Composite orders."}
+{"input":"How were Roman roads measured?","output":"Distances along Roman roads were marked by milestones set at regular intervals. A Roman mile was one thousand paces, and the Latin mille passuum, meaning a thousand paces, is the origin of the English word mile. The Golden Milestone in Rome was regarded as the point from which distances were measured."}
 SFT_EOF
 
 echo "Created SFT training data (20 examples)"
@@ -410,46 +360,46 @@ echo "--- SFT Train completed in ${TIME_SFT}s ---"
 
 # --- DPO training data ---
 cat > "$TEST_DIR/dpo_data.jsonl" << 'DPO_EOF'
-{"prompt":"What is the basic unit of life?","chosen":"The cell is the basic structural and functional unit of all living organisms. According to cell theory, all living organisms are composed of one or more cells, the cell is the basic unit of life, and all cells arise from pre-existing cells.","rejected":"Atoms are the basic unit of life because everything is made of atoms."}
-{"prompt":"What are the two main types of cells?","chosen":"Cells are broadly classified into prokaryotic and eukaryotic. Prokaryotic cells, found in bacteria and archaea, lack a membrane-bound nucleus. Eukaryotic cells, found in animals, plants, fungi, and protists, contain a well-defined nucleus and specialized organelles.","rejected":"There are plant cells and animal cells, and those are the only two types."}
-{"prompt":"What is the function of mitochondria?","chosen":"Mitochondria are the powerhouses of the cell, responsible for cellular respiration and ATP production. They have a double membrane structure with an inner membrane folded into cristae, which increases surface area for the electron transport chain.","rejected":"Mitochondria store DNA and control cell division."}
-{"prompt":"Describe the structure of DNA.","chosen":"DNA has a double helix structure consisting of two complementary strands of nucleotides. Each nucleotide contains a deoxyribose sugar, a phosphate group, and one of four nitrogenous bases: adenine (A), thymine (T), guanine (G), and cytosine (C). A pairs with T and G pairs with C.","rejected":"DNA is a single strand of proteins that carries genetic information in a linear chain."}
-{"prompt":"What is Mendel's Law of Segregation?","chosen":"The Law of Segregation states that during gamete formation, the two alleles for each gene separate so that each gamete carries only one allele for each trait. This occurs during meiosis I when homologous chromosomes are separated.","rejected":"The Law of Segregation says that dominant traits always separate from recessive traits during cell growth."}
-{"prompt":"What is osmosis?","chosen":"Osmosis is the movement of water molecules across a selectively permeable membrane from an area of lower solute concentration to an area of higher solute concentration. In a hypotonic solution, water moves into the cell; in a hypertonic solution, water moves out.","rejected":"Osmosis is the movement of all molecules across any membrane in both directions equally."}
-{"prompt":"What is the role of the Golgi apparatus?","chosen":"The Golgi apparatus processes, packages, and ships proteins and lipids received from the endoplasmic reticulum. It consists of stacked membrane-bound sacs called cisternae, and proteins move through cis, medial, and trans compartments before being sorted.","rejected":"The Golgi apparatus is where DNA replication occurs inside the cell."}
-{"prompt":"What are alleles?","chosen":"An allele is one of the variant forms of a gene at a particular locus on a chromosome. Organisms with two identical alleles are homozygous (e.g., BB or bb), while organisms with two different alleles are heterozygous (e.g., Bb).","rejected":"Alleles are different types of chromosomes found only in reproductive cells."}
-{"prompt":"How does the cell membrane regulate transport?","chosen":"The cell membrane is a phospholipid bilayer embedded with proteins, following the fluid mosaic model. It is selectively permeable, controlling the passage of substances into and out of the cell through various transport mechanisms.","rejected":"The cell membrane lets everything pass through freely since it has large holes."}
-{"prompt":"What is the difference between DNA and RNA?","chosen":"RNA differs from DNA in several ways: it is typically single-stranded, uses ribose sugar instead of deoxyribose, and contains uracil (U) instead of thymine (T). The three main types are mRNA, tRNA, and rRNA.","rejected":"DNA and RNA are identical molecules, the names are just used interchangeably."}
-{"prompt":"Explain the Law of Independent Assortment.","chosen":"The Law of Independent Assortment states that genes on different chromosomes are inherited independently. During meiosis, the orientation of each pair of homologous chromosomes is random, leading to various combinations of maternal and paternal chromosomes in gametes.","rejected":"Independent assortment means all genes are always inherited together as a complete set from one parent."}
-{"prompt":"What are lysosomes and what do they do?","chosen":"Lysosomes are membrane-bound organelles containing digestive enzymes that break down waste materials, cellular debris, and foreign invaders. They maintain an acidic internal pH of about 4.5-5.0, optimal for their hydrolytic enzymes.","rejected":"Lysosomes are found outside cells and help with photosynthesis in plants."}
-{"prompt":"What is the endoplasmic reticulum?","chosen":"The endoplasmic reticulum comes in two forms: rough ER, studded with ribosomes and involved in protein synthesis and modification, and smooth ER, which lacks ribosomes and is involved in lipid synthesis, detoxification, and calcium storage.","rejected":"The endoplasmic reticulum is a type of organelle found only in prokaryotic cells that produces energy."}
-{"prompt":"How many chromosomes do humans have?","chosen":"Humans have 46 chromosomes arranged in 23 pairs — 22 pairs of autosomes and one pair of sex chromosomes (XX in females, XY in males). Each chromosome contains many genes that code for proteins.","rejected":"Humans have 24 chromosomes total, with 12 from each parent."}
-{"prompt":"What happens in transcription?","chosen":"During transcription, RNA polymerase reads the template strand of DNA and synthesizes a complementary mRNA strand. This occurs in the nucleus and is the first stage of protein synthesis, converting the genetic code from DNA to mRNA.","rejected":"Transcription is when proteins are directly assembled from DNA without any intermediate steps."}
-{"prompt":"What is the Law of Dominance?","chosen":"The Law of Dominance states that in a heterozygous organism, only the dominant allele is expressed in the phenotype, while the recessive allele is masked. Dominant alleles are represented by uppercase letters (e.g., B) and recessive by lowercase (e.g., b).","rejected":"The Law of Dominance says that all traits blend together equally in offspring."}
-{"prompt":"What is the difference between genotype and phenotype?","chosen":"The genotype refers to the genetic makeup of an organism (e.g., BB, Bb, or bb), while the phenotype is the observable physical characteristic resulting from the genotype. A dominant allele can mask a recessive allele in the phenotype.","rejected":"Genotype and phenotype mean the same thing — they both refer to how an organism looks."}
-{"prompt":"What are the types of mutations?","chosen":"Mutations are changes in the DNA sequence that can be spontaneous or induced by mutagens. Point mutations affect a single nucleotide, while chromosomal mutations affect larger segments. They can be silent, missense (different amino acid), or nonsense (premature stop codon).","rejected":"Mutations only happen when organisms are exposed to radiation and always cause cancer."}
-{"prompt":"What happens to a cell in a hypertonic solution?","chosen":"In a hypertonic solution, water moves out of the cell by osmosis, causing the cell to shrink — a process called crenation. This occurs because the solute concentration is higher outside the cell, drawing water out across the selectively permeable membrane.","rejected":"In a hypertonic solution, the cell absorbs extra water and grows larger until it divides."}
-{"prompt":"What is the endosymbiotic theory?","chosen":"The endosymbiotic theory proposes that mitochondria (and chloroplasts) were once free-living prokaryotes that were engulfed by ancestral eukaryotic cells. Evidence includes the fact that mitochondria contain their own DNA and have a double membrane structure.","rejected":"The endosymbiotic theory states that all cells evolved from viruses that merged together."}
-{"prompt":"What is the cytoskeleton?","chosen":"The cytoskeleton is a network of protein filaments that provides structural support, aids in cell movement, and plays a role in intracellular transport. It consists of microfilaments (actin), intermediate filaments, and microtubules (tubulin).","rejected":"The cytoskeleton is the cell wall found in all cells that keeps them rigid and prevents any movement."}
-{"prompt":"Describe the stages of mitosis.","chosen":"Mitosis consists of prophase (chromatin condenses into chromosomes, spindle forms), metaphase (chromosomes align at the equator), anaphase (sister chromatids separate to opposite poles), and telophase (nuclear envelopes reform), followed by cytokinesis.","rejected":"Mitosis has only two stages: the cell splits in half and then each half grows back to full size."}
-{"prompt":"How does meiosis differ from mitosis?","chosen":"Meiosis produces four genetically unique haploid cells through two rounds of division (meiosis I and II), while mitosis produces two genetically identical diploid cells. Crossing over during prophase I of meiosis increases genetic diversity.","rejected":"Meiosis and mitosis are the same process with different names used for different organisms."}
-{"prompt":"What is active transport?","chosen":"Active transport requires energy (ATP) to move substances against their concentration gradient. A key example is the sodium-potassium pump, which pumps 3 Na+ ions out and 2 K+ ions in per ATP molecule, maintaining the cell's resting membrane potential.","rejected":"Active transport is when molecules move freely through the membrane without any energy required."}
-{"prompt":"What is epigenetics?","chosen":"Epigenetics refers to heritable changes in gene expression that do not involve changes to the DNA sequence. Key mechanisms include DNA methylation (adding methyl groups to cytosine, typically silencing genes) and histone modification (altering chromatin structure and gene accessibility).","rejected":"Epigenetics is the study of how genes mutate and change their DNA sequence over a person's lifetime."}
-{"prompt":"What is genetic linkage?","chosen":"Genetic linkage occurs when genes are located close together on the same chromosome and tend to be inherited together. The recombination frequency between linked genes depends on their physical distance, measured in centimorgans. Thomas Hunt Morgan demonstrated this using Drosophila.","rejected":"Genetic linkage means all genes on the same chromosome are always inherited as an identical block with no variation."}
-{"prompt":"How does PCR work?","chosen":"PCR amplifies specific DNA sequences through repeated cycles of denaturation (separating strands at ~95°C), annealing (primers binding at ~55-65°C), and extension (DNA polymerase synthesizing new strands at ~72°C). It can produce millions of copies from a tiny starting amount.","rejected":"PCR is a chemical reaction that creates entirely new DNA sequences that don't exist in the original sample."}
-{"prompt":"What is a population in ecology?","chosen":"A population is a group of individuals of the same species living in a particular area at a given time. Population growth can follow exponential growth (unlimited resources, dN/dt = rN) or logistic growth (limited resources, dN/dt = rN(1-N/K), where K is carrying capacity).","rejected":"A population is any random collection of different species found anywhere on Earth at any time."}
-{"prompt":"What is the competitive exclusion principle?","chosen":"The competitive exclusion principle (Gause's principle) states that two species competing for the same limited resource cannot coexist indefinitely — one will outcompete and exclude the other. This drives niche differentiation among coexisting species.","rejected":"The competitive exclusion principle states that all species in an ecosystem must cooperate equally to survive."}
-{"prompt":"How does energy flow through ecosystems?","chosen":"Energy flows through ecosystems in one direction: from the sun to producers (autotrophs) to consumers (heterotrophs) to decomposers. Only about 10% of energy is transferred from one trophic level to the next, with the rest lost as heat through cellular respiration.","rejected":"Energy flows in a circle through ecosystems, with each organism passing 100% of its energy to the next level."}
-{"prompt":"What is the nitrogen cycle?","chosen":"The nitrogen cycle includes nitrogen fixation (N2 to NH3 by bacteria), nitrification (NH3 to NO3-), assimilation by plants, and denitrification (NO3- back to N2). These processes move nitrogen through biotic and abiotic components of ecosystems.","rejected":"The nitrogen cycle is when plants absorb nitrogen gas directly from the atmosphere through their leaves."}
-{"prompt":"What is ecological succession?","chosen":"Ecological succession is the process of change in community species structure over time. Primary succession occurs on bare surfaces (e.g., after volcanic eruption) starting with pioneer species like lichens. Secondary succession occurs where soil remains (e.g., after fire). Both progress toward a climax community.","rejected":"Ecological succession is when all species in an area go extinct simultaneously and are replaced by completely new species."}
-{"prompt":"What is natural selection?","chosen":"Natural selection requires variation, heritability, differential reproduction, and adaptation. Individuals with favorable traits produce more offspring, and over generations those traits become more common. Natural selection acts on phenotypes, but evolution occurs through changes in allele frequencies.","rejected":"Natural selection is when organisms consciously choose to develop better traits to survive in their environment."}
-{"prompt":"What is the Hardy-Weinberg principle?","chosen":"The Hardy-Weinberg principle describes conditions under which allele frequencies remain constant: no mutation, random mating, no selection, large population, and no gene flow. The equation p² + 2pq + q² = 1 predicts genotype frequencies. Any deviation causes evolution.","rejected":"The Hardy-Weinberg principle states that all populations always maintain the same allele frequencies regardless of conditions."}
-{"prompt":"What is genetic drift?","chosen":"Genetic drift is the random change in allele frequencies due to chance events, especially significant in small populations. The bottleneck effect occurs when population size drastically decreases, and the founder effect occurs when a small group starts a new population.","rejected":"Genetic drift is when organisms intentionally migrate to new locations to find better mates with different genes."}
-{"prompt":"How does allopatric speciation occur?","chosen":"Allopatric speciation occurs when populations are geographically separated by a physical barrier (e.g., mountain range or river), preventing gene flow. Over time, the isolated populations diverge genetically through mutation, drift, and selection, becoming reproductively isolated.","rejected":"Allopatric speciation happens when all individuals in a species simultaneously decide to split into two groups."}
-{"prompt":"What evidence supports evolution?","chosen":"Evidence for evolution includes the fossil record (transitional forms), comparative anatomy (homologous structures like the pentadactyl limb), molecular biology (shared genetic code, DNA sequence similarity), and biogeography (species distribution reflecting evolutionary history).","rejected":"There is no scientific evidence for evolution; it is purely a philosophical concept with no observable support."}
-{"prompt":"What is coevolution?","chosen":"Coevolution occurs when two or more species reciprocally affect each other's evolution. Examples include predator-prey arms races (newt toxin vs. snake resistance), plant-pollinator relationships, and host-parasite interactions. It drives rapid diversification and specialization.","rejected":"Coevolution means all species in an ecosystem evolve at exactly the same rate in the same direction."}
-{"prompt":"What threats affect biodiversity?","chosen":"Major threats to biodiversity include habitat destruction, invasive species, pollution, overexploitation, and climate change (known by the acronym HIPPO). Biodiversity at genetic, species, and ecosystem levels is critical for ecosystem stability and resilience.","rejected":"Biodiversity is never threatened because nature always maintains a perfect balance regardless of human activity."}
-{"prompt":"What is phylogenetics?","chosen":"Phylogenetics is the study of evolutionary relationships among organisms. Phylogenetic trees (cladograms) show inferred relationships based on shared derived characteristics (synapomorphies). Molecular phylogenetics uses DNA or protein sequence comparisons, often applying the molecular clock hypothesis.","rejected":"Phylogenetics is the classification of organisms by size and color, and has nothing to do with evolutionary history."}
+{"prompt":"When was Rome traditionally founded?","chosen":"Rome was traditionally founded in 753 BC, a date calculated by the scholar Varro. According to legend the city was established by Romulus, who became its first king, though archaeology shows settlements existed on the site from at least the 8th century BC.","rejected":"Rome was founded in 1200 AD during the Middle Ages by a group of traveling merchants."}
+{"prompt":"On how many hills was the city of Rome built?","chosen":"Rome was built on seven hills overlooking the Tiber River: the Palatine, Capitoline, Aventine, Caelian, Esquiline, Viminal, and Quirinal. The Palatine is where the earliest settlement is thought to have begun.","rejected":"Rome was built on a single large mountain with no surrounding hills."}
+{"prompt":"What are the three periods of Roman history?","chosen":"Roman history is divided into three periods: the Roman Kingdom (753–509 BC), ruled by kings; the Roman Republic (509–27 BC), governed by elected officials and a Senate; and the Roman Empire (27 BC onward), which began under Augustus.","rejected":"Roman history had only one period, the Empire, which lasted from the beginning to the end without any changes in government."}
+{"prompt":"Why was the Tiber River important to Rome?","chosen":"The Tiber River provided fresh water, a route for trade, and a natural defensive barrier. Rome's location inland gave it access to the sea through the river while keeping it protected from coastal raids, and the Tiber Island offered the easiest crossing point.","rejected":"The Tiber River was unimportant to Rome because the city relied entirely on rainfall and had no use for the river."}
+{"prompt":"When was the Roman Republic established?","chosen":"The Roman Republic was established in 509 BC, when the Romans replaced their monarchy with elected officials and representative bodies. The word republic comes from the Latin res publica, meaning the public affair.","rejected":"The Roman Republic was established in 753 BC at the same moment the city was founded, with no period of monarchy beforehand."}
+{"prompt":"What was the Roman Senate?","chosen":"The Senate was the most prestigious institution of the Republic, a council of experienced statesmen who advised the magistrates and guided policy on finance, foreign relations, and religion. Its authority and continuity made it the dominant force in Roman politics.","rejected":"The Senate was a single elected king who ruled Rome with absolute power and answered to no one."}
+{"prompt":"How many consuls led the Roman Republic, and why?","chosen":"The Republic was led by two consuls, elected annually. Having two consuls who could each veto the other prevented any single person from holding too much power, and the one-year term ensured regular turnover.","rejected":"The Republic was led by one consul who served for life and could not be removed or overruled by anyone."}
+{"prompt":"What was the cursus honorum?","chosen":"The cursus honorum, or course of honors, was the sequence of offices a Roman official advanced through: quaestor (finances), aedile (public buildings and games), praetor (justice), and finally consul, the highest regular office. Each step required a minimum age and prior experience.","rejected":"The cursus honorum was a chariot race held each year to decide who would become the next king of Rome."}
+{"prompt":"What were the Twelve Tables?","chosen":"The Twelve Tables, written around 451 BC, were Rome's first written code of law. By inscribing the laws on twelve bronze tablets displayed in public, Rome made the rules known to everyone, and they became the foundation of Roman law.","rejected":"The Twelve Tables were twelve dining tables in the Senate house where senators ate their meals during meetings."}
+{"prompt":"What does SPQR stand for?","chosen":"SPQR stands for Senatus Populusque Romanus, meaning the Senate and the People of Rome. It appeared on official documents, monuments, and standards, symbolizing the shared authority of the governing council and the citizens.","rejected":"SPQR stands for the Strong Powerful Quick Romans, a motto used only by the Roman army."}
+{"prompt":"What were the tribunes of the plebs?","chosen":"The tribunes of the plebs were officials created to protect the common citizens, the plebeians. They could veto actions of magistrates and the Senate judged harmful to the people, and their persons were legally protected, giving ordinary citizens a formal voice.","rejected":"The tribunes of the plebs were wealthy nobles who collected taxes from the poor and had no role in protecting citizens."}
+{"prompt":"What was the first major Roman road?","chosen":"The first great Roman road was the Appian Way (Via Appia), begun in 312 BC, connecting Rome to the south of Italy. Roman roads were built in layers of stone, gravel, and fitted paving, and were cambered so rainwater drained to the sides.","rejected":"The first Roman road was the Silk Road, which the Romans built to connect directly to China."}
+{"prompt":"How did Roman aqueducts move water?","chosen":"Roman aqueducts worked entirely by gravity. The channel sloped gently downhill for its whole length, often many kilometers, so water flowed steadily without any pump. Where valleys interrupted the route, engineers carried the channel across on rows of stone arches.","rejected":"Roman aqueducts used large mechanical pumps powered by steam engines to push water uphill into the cities."}
+{"prompt":"What was Roman concrete made of?","chosen":"Roman concrete, called opus caementicium, was made by mixing lime, water, and a volcanic ash called pozzolana with pieces of stone or brick. It set into a hard, durable mass and could even harden underwater, making it ideal for harbors and large vaulted structures.","rejected":"Roman concrete was made from a mixture of mud and straw that dried in the sun and dissolved when it rained."}
+{"prompt":"How does a Roman arch carry weight?","chosen":"An arch carries weight by directing the load outward and downward along a curve of wedge-shaped stones called voussoirs. The keystone at the top locks the others in place. Because the arch is strong in compression, it let the Romans bridge wide openings and build to great heights.","rejected":"A Roman arch carries weight because the stones are glued together with a strong adhesive, and it would collapse without the glue."}
+{"prompt":"What is the Pantheon known for?","chosen":"The Pantheon in Rome, rebuilt under Hadrian around 126 AD, is famous for its enormous concrete dome with a circular opening at the center called the oculus, open to the sky. Its interior height and diameter are nearly equal, forming the shape of a sphere within the building.","rejected":"The Pantheon is known for being a tall narrow tower with a pointed spire and no roof of any kind."}
+{"prompt":"What was the Colosseum?","chosen":"The Colosseum, formally the Flavian Amphitheatre, was completed around 80 AD. It was an oval arena used for public spectacles, built of stone and concrete with a system of arches and vaults supporting tiered seating for tens of thousands of spectators.","rejected":"The Colosseum was a small private house where a single Roman family lived on the outskirts of the city."}
+{"prompt":"What was the Roman Forum?","chosen":"The Roman Forum was the civic center of the city, an open public square surrounded by government buildings, temples, and monuments. Citizens gathered there for elections, public speeches, legal proceedings, and commerce, and it remained the symbolic heart of public life.","rejected":"The Roman Forum was a farm outside the city where Romans grew grain and kept their livestock."}
+{"prompt":"What are the three classical orders of columns?","chosen":"The three Greek classical orders are the Doric, plain and sturdy with a simple capital; the Ionic, more slender with scroll-shaped volutes; and the Corinthian, the most ornate, decorated with carved acanthus leaves. The Romans also added the Tuscan and Composite orders.","rejected":"The three classical orders are small, medium, and large, referring only to the height of the columns."}
+{"prompt":"How were Roman roads measured?","chosen":"Distances along Roman roads were marked by milestones set at regular intervals. A Roman mile was one thousand paces, and the Latin mille passuum, meaning a thousand paces, is the origin of the English word mile. The Golden Milestone in Rome marked the point distances were measured from.","rejected":"Roman roads were never measured; travelers simply guessed how far they had gone based on how tired they felt."}
+{"prompt":"Who was the first Roman emperor?","chosen":"Augustus was the first Roman emperor, beginning his rule in 27 BC. His reign marked the transition from the Roman Republic to the Roman Empire, concentrating authority in a single ruler while preserving many republican institutions in name.","rejected":"The first Roman emperor was Romulus, who ruled the empire immediately after founding the city in 753 BC."}
+{"prompt":"What was the pomerium?","chosen":"The pomerium was a sacred boundary line marking the original limit of the city of Rome. Within the pomerium, certain activities were restricted by religious custom. As Rome grew, the pomerium was extended several times to reflect the city's expansion.","rejected":"The pomerium was a type of fruit grown in Roman gardens and used to make wine for festivals."}
+{"prompt":"What does ab urbe condita mean?","chosen":"Ab urbe condita means from the founding of the city. The Romans used this phrase to measure their calendar from the supposed founding of Rome in 753 BC, sometimes recording events as occurring a given number of years after the city's founding.","rejected":"Ab urbe condita means the end of the world, a phrase the Romans used to predict the fall of their empire."}
+{"prompt":"Who were the Etruscans?","chosen":"The Etruscans were a people who lived to the north of Rome and strongly influenced early Roman culture. They contributed engineering knowledge, religious practices, and some of Rome's early symbols of authority during the period of the Roman Kingdom.","rejected":"The Etruscans were a people from northern Europe who never had any contact with Rome or its culture."}
+{"prompt":"What was the Cloaca Maxima?","chosen":"The Cloaca Maxima, or Great Sewer, was one of the earliest large sewer systems, originally built to drain marshy ground near the Forum and later used to carry waste water to the Tiber. Clean water from aqueducts helped flush the drains.","rejected":"The Cloaca Maxima was the largest temple in Rome, dedicated to the worship of the river gods."}
+{"prompt":"What is a basilica in Roman architecture?","chosen":"A basilica was a large rectangular hall used for public business and law courts. It typically had a high central nave flanked by lower side aisles separated by rows of columns, with light entering through upper windows. The form was later adapted for places of worship.","rejected":"A basilica was a small underground room where Romans stored grain and olive oil for the winter."}
+{"prompt":"What was the groma used for?","chosen":"The groma was a surveying instrument used by Roman engineers to sight straight lines and right angles. It was a cross of horizontal arms with hanging weights, and with it surveyors achieved the precise alignments their roads and aqueducts required.","rejected":"The groma was a musical instrument played at Roman festivals and had no practical engineering use."}
+{"prompt":"How were Roman cities typically laid out?","chosen":"Many Roman cities followed a planned grid layout with two main streets crossing at right angles: the cardo running north to south and the decumanus running east to west. Their intersection often marked the location of the forum and main public buildings.","rejected":"Roman cities were laid out as a series of concentric circles with no straight streets anywhere in the plan."}
+{"prompt":"What was a Roman mile based on?","chosen":"A Roman mile was based on one thousand paces. The Latin phrase mille passuum, meaning a thousand paces, is the origin of the English word mile. Milestones marked these distances at regular intervals along Roman roads.","rejected":"A Roman mile was based on the distance a horse could run in one hour without stopping to rest."}
+{"prompt":"What materials did Roman builders use?","chosen":"Roman builders used travertine, a local limestone valued for its strength; marble, prized for fine decorative surfaces and imported from across the Mediterranean; and brick and concrete for the structural core, often faced with stone so a sturdy structure could present an elegant exterior.","rejected":"Roman builders used only wood and dried mud, which is why none of their buildings have survived to the present day."}
+{"prompt":"What was the Palatine Hill known for?","chosen":"The Palatine Hill is where the earliest settlement of Rome is thought to have begun, and it later became the location of imperial residences. It is one of the seven hills on which the city of Rome was built.","rejected":"The Palatine Hill was located far outside Italy and had no connection to the city of Rome."}
+{"prompt":"What did the Capitoline Hill hold?","chosen":"The Capitoline Hill held the most important temples of Rome, including the Temple of Jupiter Optimus Maximus, and served as the religious and political heart of the city. It is one of Rome's seven hills.","rejected":"The Capitoline Hill held the city's marketplace for selling fish and had no religious significance."}
+{"prompt":"What is the oculus of the Pantheon?","chosen":"The oculus is the circular opening at the center of the Pantheon's dome, open to the sky, which lets light into the building. It is one of the most distinctive features of the Pantheon's famous concrete dome.","rejected":"The oculus is a statue of an eye placed at the entrance of the Pantheon to ward off bad luck."}
+{"prompt":"Why did the Romans use two consuls instead of one?","chosen":"The Romans used two consuls so that each could veto the other, preventing any single person from gaining too much power. Combined with the annual term, this design ensured shared authority and regular turnover in the leadership of the Republic.","rejected":"The Romans used two consuls only because there was too much paperwork for one person to complete in a year."}
+{"prompt":"What was the Via Appia?","chosen":"The Via Appia, or Appian Way, was the first great Roman road, begun in 312 BC to connect Rome with the south of Italy. It was built in durable layers and became a model for the extensive Roman road network.","rejected":"The Via Appia was a river in northern Italy that the Romans used for shipping wine and grain."}
+{"prompt":"What distinguished the Corinthian order?","chosen":"The Corinthian order was the most ornate of the three Greek classical orders, distinguished by capitals decorated with carved acanthus leaves. The Romans adopted it widely and favored its decorative richness for grand public buildings.","rejected":"The Corinthian order was the plainest column style, with no capital and no decoration of any kind."}
+{"prompt":"What role did the aedile play in Roman government?","chosen":"The aedile was a Roman magistrate in the cursus honorum responsible for public buildings, games, and the grain supply. The office came after the quaestor and before the praetor in the sequence of offices an official advanced through.","rejected":"The aedile was the supreme commander of Rome who held power for life and outranked the consuls."}
+{"prompt":"How did Polybius describe the Roman constitution?","chosen":"The Greek historian Polybius, who lived in Rome in the 2nd century BC, described the Roman constitution as a mixture of monarchy, aristocracy, and democracy, with each element restraining the others, an early example of balanced and checked authority.","rejected":"Polybius described the Roman constitution as a pure dictatorship with no checks on the ruler's power."}
+{"prompt":"What was the Milliarium Aureum?","chosen":"The Milliarium Aureum, or Golden Milestone, was a gilded monument in Rome regarded as the point from which all distances in the empire were measured. It reflected the idea that the road network radiated outward from the capital.","rejected":"The Milliarium Aureum was a golden crown worn by Roman consuls during religious festivals."}
+{"prompt":"What is the difference between the cardo and the decumanus?","chosen":"In a planned Roman city, the cardo was the main street running north to south, and the decumanus was the main street running east to west. The two crossed at right angles, and their intersection often marked the forum and main public buildings.","rejected":"The cardo and decumanus were two rival Roman armies that fought each other for control of the city streets."}
 DPO_EOF
 
 echo "Created DPO training data (40 examples)"
@@ -471,7 +421,7 @@ fi
 echo ""
 echo "=== Config ==="
 STEP_START=$SECONDS
-"$INSTRUCTOR" config --project "$TEST_DIR" --system-prompt "You are a helpful biology tutor. Answer questions accurately using course materials."
+"$INSTRUCTOR" config --project "$TEST_DIR" --system-prompt "You are a helpful ancient history tutor. Answer questions accurately using course materials."
 TIME_CONFIG=$(( SECONDS - STEP_START ))
 echo "--- Config completed in ${TIME_CONFIG}s ---"
 

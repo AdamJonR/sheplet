@@ -15,20 +15,20 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 MODEL_DIR = "downloaded-models/google--gemma-2-2b-it"
 
 # Exact same prompt that sheplet produces (assemble_prompt_gemma with RAG context)
-SYSTEM_PROMPT = "You are a helpful biology tutor. Answer questions accurately using course materials."
+SYSTEM_PROMPT = "You are a helpful ancient history tutor. Answer questions accurately using course materials."
 CONTEXT = (
-    "Chromosomes are structures made of DNA tightly coiled around histone proteins. "
-    "Humans have 46 chromosomes arranged in 23 pairs — 22 pairs of autosomes and one "
-    "pair of sex chromosomes (XX in females, XY in males). Each chromosome contains "
-    "many genes, which are specific segments of DNA that code for proteins."
+    "The city of Rome was built on seven hills overlooking the Tiber River: the Palatine, "
+    "Capitoline, Aventine, Caelian, Esquiline, Viminal, and Quirinal. The Palatine Hill is "
+    "where the earliest settlement is thought to have begun, and the Capitoline Hill held "
+    "the city's most important temples."
 )
-QUESTION = "How many chromosomes does a human have?"
+QUESTION = "On how many hills was the city of Rome built?"
 
 PROMPT = (
     f"<start_of_turn>user\n"
     f"Instructions: {SYSTEM_PROMPT}\n\n"
     f"---\nContext from course materials:\n"
-    f"[1] {CONTEXT} (Source: genetics_basics.txt)\n"
+    f"[1] {CONTEXT} (Source: roman_founding.txt)\n"
     f"---\n\n"
     f"Question: {QUESTION}<end_of_turn>\n"
     f"<start_of_turn>model\n"

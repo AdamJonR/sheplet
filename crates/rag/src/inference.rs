@@ -199,8 +199,8 @@ impl PhiGenerator {
         // dtype, but Gemma2's attention logit softcapping compresses dynamic range,
         // making BF16 softmax precision insufficient. HuggingFace explicitly uses
         // F32 softmax for Gemma2. Without F32, precision errors compound through
-        // 26 layers, producing corrupted logit distributions (e.g. "46923" instead
-        // of "46" for chromosome count).
+        // 26 layers, producing corrupted logit distributions (e.g. a garbled
+        // number like "7000" instead of "seven").
         let dtype = match (device.is_cpu(), &arch) {
             (true, _) => DType::F32,
             (_, ModelArch::Gemma2) => DType::F32,

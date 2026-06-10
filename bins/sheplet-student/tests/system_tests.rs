@@ -73,7 +73,7 @@ async fn test_full_pipeline_test_model() {
     // --- Chat ---
     println!("=== Student: Chat ===");
     let chat_body = serde_json::json!({
-        "message": "What is a cell?",
+        "message": "On how many hills was the city of Rome built?",
         "max_tokens": 64,
     });
 
