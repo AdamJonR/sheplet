@@ -143,7 +143,26 @@ async fn export_conversation(
     match state.conversations.get(&id) {
         Ok(Some(conv)) => {
             let txt = export_as_txt(&conv);
-            let filename = format!("{}.txt", conv.title.replace(' ', "_"));
+            // The title is user-controlled and lands in a response header:
+            // allowlist filename characters so quotes/CR/LF/etc. can't break
+            // out of the Content-Disposition quoting
+            let safe_title: String = conv
+                .title
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '-' | '.') {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let safe_title = safe_title.trim_matches('_');
+            let filename = if safe_title.is_empty() {
+                "conversation.txt".to_string()
+            } else {
+                format!("{safe_title}.txt")
+            };
             Ok((
                 StatusCode::OK,
                 [

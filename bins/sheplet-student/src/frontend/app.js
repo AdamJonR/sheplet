@@ -470,8 +470,10 @@ settingsBtn.addEventListener('click', async () => {
         const settings = await api('GET', '/api/settings');
         document.getElementById('setting-strategy').value = settings.retrieval_strategy;
         document.getElementById('setting-k').value = settings.top_k;
-        document.getElementById('setting-threshold').value = settings.relevance_threshold;
-        document.getElementById('setting-lambda').value = settings.mmr_lambda;
+        const thresholdInput = document.getElementById('setting-threshold');
+        thresholdInput.value = settings.relevance_threshold;
+        // The instructor sets a floor for relevance; it can be raised, not lowered
+        thresholdInput.min = settings.min_relevance_threshold;
         settingsModal.style.display = 'flex';
     } catch (e) {
         alert('Please load a course first to view settings.');

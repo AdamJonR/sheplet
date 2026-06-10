@@ -5,6 +5,11 @@ use crate::error::BundleError;
 use crate::keys::Keypair;
 use crate::manifest::Manifest;
 
+/// Maximum size of manifest.json. Pass 1 runs *before* signature
+/// verification, so the read must be bounded or a malicious bundle could
+/// trigger an unbounded allocation (zstd decompression bomb).
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
 /// Create a streaming tar archive over zstd-compressed data.
 ///
 /// Each call produces a fresh decompression stream, allowing multiple
@@ -55,7 +60,12 @@ pub fn verify_and_unpack(
             let path = entry.path()?;
             if path.as_ref() == Path::new("manifest.json") {
                 let mut buf = Vec::new();
-                entry.read_to_end(&mut buf)?;
+                let n = entry.by_ref().take(MAX_MANIFEST_BYTES + 1).read_to_end(&mut buf)?;
+                if n as u64 > MAX_MANIFEST_BYTES {
+                    return Err(BundleError::InvalidManifest(format!(
+                        "manifest.json exceeds {MAX_MANIFEST_BYTES} bytes"
+                    )));
+                }
                 manifest_data = Some(buf);
                 break;
             }

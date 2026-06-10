@@ -15,6 +15,8 @@ pub struct SettingsResponse {
     top_k: usize,
     relevance_threshold: f64,
     mmr_lambda: f32,
+    /// Instructor-set floor: the threshold cannot be lowered below this.
+    min_relevance_threshold: f64,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +52,7 @@ async fn get_settings(
         top_k: config.top_k,
         relevance_threshold: config.relevance_threshold,
         mmr_lambda: config.mmr_lambda,
+        min_relevance_threshold: active.metadata.config.relevance_threshold,
     }))
 }
 
@@ -108,6 +111,24 @@ async fn update_settings(
             }),
         )
     })?;
+
+    // Academic-integrity lock: the relevance threshold is set by the
+    // instructor in the bundle config and may only be raised, never lowered —
+    // lowering it would let off-syllabus queries through the blocking gate.
+    let instructor_threshold = active.metadata.config.relevance_threshold;
+    if let Some(threshold) = req.relevance_threshold {
+        if threshold < instructor_threshold {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!(
+                        "relevance_threshold is locked by your instructor at a minimum of {instructor_threshold}"
+                    ),
+                }),
+            ));
+        }
+    }
+
     active.pipeline.write().await.update_settings(
         req.retrieval_strategy,
         req.top_k,

@@ -121,9 +121,7 @@ fn timestamp() -> String {
 }
 
 fn rand_id() -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    SystemTime::now().hash(&mut hasher);
-    std::thread::current().id().hash(&mut hasher);
-    hasher.finish()
+    // CSPRNG: task IDs gate access to task SSE streams, so they must not be
+    // predictable from the clock
+    rand::random::<u64>()
 }

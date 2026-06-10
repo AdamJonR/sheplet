@@ -174,11 +174,18 @@ async function refreshDashboard() {
         items.forEach(item => {
             const div = document.createElement('div');
             div.className = `checklist-item ${item.done ? 'done' : 'pending'}`;
-            div.innerHTML = `
-                <span class="check-icon">${item.done ? '\u2713' : '\u25CB'}</span>
-                <span class="check-label">${item.label}</span>
-                <span class="check-detail">${item.detail}</span>
-            `;
+            // textContent (not innerHTML): details include filenames and
+            // project metadata that must not be interpreted as markup
+            const icon = document.createElement('span');
+            icon.className = 'check-icon';
+            icon.textContent = item.done ? '\u2713' : '\u25CB';
+            const label = document.createElement('span');
+            label.className = 'check-label';
+            label.textContent = item.label;
+            const detail = document.createElement('span');
+            detail.className = 'check-detail';
+            detail.textContent = item.detail;
+            div.append(icon, label, detail);
             checklist.appendChild(div);
         });
     } catch (e) {
@@ -217,7 +224,10 @@ function subscribeToTask(taskId, progressEl, onDone) {
 
         const stepDiv = document.createElement('div');
         stepDiv.className = 'progress-step active';
-        stepDiv.innerHTML = `<span class="step-icon"><span class="spinner"></span></span><span>${stepName}</span>`;
+        stepDiv.innerHTML = '<span class="step-icon"><span class="spinner"></span></span>';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = stepName;
+        stepDiv.appendChild(nameSpan);
         stepsDiv.appendChild(stepDiv);
         steps[stepName] = stepDiv;
     });
@@ -481,19 +491,47 @@ async function refreshBundleInfo() {
         const data = await api('GET', '/api/projects/active');
         if (!data.project) return;
         const s = data.project.status;
-        infoBox.innerHTML = `
-            <div class="info-row"><span class="info-label">Version:</span> ${data.project.version}</div>
-            <div class="info-row"><span class="info-label">AI Model:</span> ${s.model_name || 'Not selected'}</div>
-            <div class="info-row"><span class="info-label">Customized:</span> ${s.has_adapter ? 'Yes — trained on your examples' : 'No (optional)'}</div>
-            <div class="info-row"><span class="info-label">Materials:</span> ${s.has_database ? 'Indexed and ready' : 'No documents imported'}</div>
-            <div class="info-row"><span class="info-label">Last built:</span> ${s.build_timestamp || 'Never'}</div>
-            <div class="info-row fingerprint-row">
-                <span class="info-label">Fingerprint:</span>
-                <code class="fingerprint">${s.fingerprint || 'Not available'}</code>
-                ${s.fingerprint ? `<button class="btn-copy" onclick="navigator.clipboard.writeText('${s.fingerprint}')">Copy</button>` : ''}
-            </div>
-            <div class="info-hint">Students must enter this fingerprint when loading the bundle.</div>
-        `;
+        // Build with textContent (not innerHTML interpolation): model names,
+        // timestamps, and fingerprints must not be interpreted as markup
+        infoBox.innerHTML = '';
+        const addRow = (label, value, extraClass) => {
+            const row = document.createElement('div');
+            row.className = 'info-row' + (extraClass ? ` ${extraClass}` : '');
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'info-label';
+            labelSpan.textContent = label;
+            row.appendChild(labelSpan);
+            row.append(' ' + value);
+            return row;
+        };
+        infoBox.appendChild(addRow('Version:', data.project.version));
+        infoBox.appendChild(addRow('AI Model:', s.model_name || 'Not selected'));
+        infoBox.appendChild(addRow('Customized:', s.has_adapter ? 'Yes — trained on your examples' : 'No (optional)'));
+        infoBox.appendChild(addRow('Materials:', s.has_database ? 'Indexed and ready' : 'No documents imported'));
+        infoBox.appendChild(addRow('Last built:', s.build_timestamp || 'Never'));
+
+        const fpRow = document.createElement('div');
+        fpRow.className = 'info-row fingerprint-row';
+        const fpLabel = document.createElement('span');
+        fpLabel.className = 'info-label';
+        fpLabel.textContent = 'Fingerprint:';
+        const fpCode = document.createElement('code');
+        fpCode.className = 'fingerprint';
+        fpCode.textContent = s.fingerprint || 'Not available';
+        fpRow.append(fpLabel, ' ', fpCode);
+        if (s.fingerprint) {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'btn-copy';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', () => navigator.clipboard.writeText(s.fingerprint));
+            fpRow.appendChild(copyBtn);
+        }
+        infoBox.appendChild(fpRow);
+
+        const hint = document.createElement('div');
+        hint.className = 'info-hint';
+        hint.textContent = 'Students must enter this fingerprint when loading the bundle.';
+        infoBox.appendChild(hint);
     } catch (e) {
         console.error('Failed to load bundle info:', e);
     }

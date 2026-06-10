@@ -65,14 +65,25 @@ async fn get_or_create_conversation(
     course_id: &str,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     if let Some(id) = conversation_id {
-        if state.conversations.get(id).map_err(|e| {
+        if let Some(conv) = state.conversations.get(id).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
                     error: e.to_string(),
                 }),
             )
-        })?.is_some() {
+        })? {
+            // A conversation belongs to one course; injecting another
+            // course's history into this course's prompt would leak content
+            // across courses
+            if conv.course_id != course_id {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "Conversation belongs to a different course".to_string(),
+                    }),
+                ));
+            }
             return Ok(id.to_string());
         }
     }
